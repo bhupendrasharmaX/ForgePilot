@@ -1,0 +1,30 @@
+# TrueForge Model Configuration Example for ForgePilot
+# Configure primary and fallback models according to your preferred LLM provider.
+
+trueforge:
+  endpoint: "http://localhost:8790"
+  timeout_seconds: 60
+
+models:
+  primary:
+    provider: "google"
+    model_name: "gemini-2.5-pro"
+    temperature: 0.2
+    max_output_tokens: 8192
+    context_window: 1000000
+
+  fallback:
+    provider: "google"
+    model_name: "gemini-2.5-flash"
+    temperature: 0.2
+    max_output_tokens: 8192
+    context_window: 1000000
+
+resilience:
+  max_retries: 3
+  backoff_factor: 2.0
+  initial_delay_ms: 1000
+  failover_on_status_codes:
+    - 429 # Quota / Rate limit
+    - 500 # Provider internal error
+    - 503 # Service unavailable

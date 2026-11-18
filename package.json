@@ -1,0 +1,127 @@
+{
+  "name": "forgepilot",
+  "displayName": "ForgePilot",
+  "description": "Autonomous AI coding assistant for Visual Studio Code powered by TrueForge",
+  "version": "1.0.0",
+  "publisher": "forgepilot",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Machine Learning",
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "forgepilot-activitybar",
+          "title": "ForgePilot",
+          "icon": "media/icons/forgepilot.svg"
+        }
+      ]
+    },
+    "views": {
+      "forgepilot-activitybar": [
+        {
+          "type": "webview",
+          "id": "forgepilot.agentView",
+          "name": "ForgePilot Agent"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "forgepilot.openAgent",
+        "title": "ForgePilot: Open Agent Sidebar",
+        "category": "ForgePilot"
+      },
+      {
+        "command": "forgepilot.inlineEdit",
+        "title": "ForgePilot: Inline Edit Selection",
+        "category": "ForgePilot"
+      },
+      {
+        "command": "forgepilot.reviewChanges",
+        "title": "ForgePilot: Review Proposed Changes",
+        "category": "ForgePilot"
+      },
+      {
+        "command": "forgepilot.cancelAgent",
+        "title": "ForgePilot: Cancel Active Agent Turn",
+        "category": "ForgePilot"
+      },
+      {
+        "command": "forgepilot.newSession",
+        "title": "ForgePilot: Start New TrueForge Session",
+        "category": "ForgePilot"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "forgepilot.inlineEdit",
+        "key": "ctrl+alt+i",
+        "mac": "cmd+alt+i",
+        "when": "editorTextFocus"
+      }
+    ],
+    "configuration": {
+      "title": "ForgePilot",
+      "properties": {
+        "forgepilot.trueforgeEndpoint": {
+          "type": "string",
+          "default": "http://localhost:8790",
+          "description": "TrueForge server endpoint URL"
+        },
+        "forgepilot.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "TrueForge API Key (optional for local mode)"
+        },
+        "forgepilot.primaryModel": {
+          "type": "string",
+          "default": "gemini-2.5-pro",
+          "description": "Primary model configured in TrueForge"
+        },
+        "forgepilot.fallbackModel": {
+          "type": "string",
+          "default": "gemini-2.5-flash",
+          "description": "Secondary fallback model configured in TrueForge"
+        },
+        "forgepilot.tokenBudget": {
+          "type": "number",
+          "default": 20000,
+          "description": "Context retrieval token budget"
+        },
+        "forgepilot.autoRunTests": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically run tests after applying changes when requested"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.6.1",
+    "diff": "^7.0.0"
+  },
+  "devDependencies": {
+    "@types/diff": "^7.0.2",
+    "@types/node": "^22.13.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  }
+}
