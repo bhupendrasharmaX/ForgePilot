@@ -437,3 +437,4 @@ $ npm test
 | **5. Streaming & Cancellation** | Emits SSE event deltas; handles turn abort endpoint | Renders real-time text; Cancel button aborts turn cleanly | `src/services/trueforge.ts` | Task C: Abort verified; `git status --short` clean (363ms) |
 | **6. TrueForge Harness** | Executes all reasoning loops; zero direct LLM calls from extension | Communicates exclusively via TrueForge SDK/REST API | `src/services/trueforge.ts` | Verified: zero provider SDKs (OpenAI/Gemini/Anthropic) in extension |
 | **7. OpenAI Model Provider** | TrueForge routed to OpenAI provider (`gpt-4o` / `gpt-4o-mini`) | Reads settings and configures TrueForge agent definition | `agents/forgepilot-agent.yaml` | Verified via `forgepilot-agent.yaml` and `model-config.example.yaml` |
+
