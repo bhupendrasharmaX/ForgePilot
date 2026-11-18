@@ -11,3 +11,4 @@ export async function reviewChanges(diffManager: DiffManager): Promise<void> {
   // Open sidebar view tab for diffs
   await vscode.commands.executeCommand('forgepilot.agentView.focus');
 }
+

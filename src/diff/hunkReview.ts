@@ -103,3 +103,4 @@ export function reconstructContent(
   const hasCrLf = originalContent.includes('\r\n');
   return resultLines.join(hasCrLf ? '\r\n' : '\n');
 }
+

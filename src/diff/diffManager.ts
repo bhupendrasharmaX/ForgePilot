@@ -196,3 +196,4 @@ export class DiffManager {
     this.notifyChange();
   }
 }
+

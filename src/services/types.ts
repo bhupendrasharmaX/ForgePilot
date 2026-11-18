@@ -50,3 +50,4 @@ export interface SessionInfo {
   updatedAt: number;
   status: 'active' | 'idle' | 'archived';
 }
+

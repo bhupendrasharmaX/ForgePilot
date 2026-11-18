@@ -45,3 +45,4 @@ export interface GetFileDiffArgs {
   proposalId?: string;
   path?: string;
 }
+

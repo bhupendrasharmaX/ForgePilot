@@ -103,3 +103,4 @@ All model execution is managed through TrueForge configuration (`agents/forgepil
 2. **TrueForge Multi-Agent Swarms**: Distribute large multi-repository refactoring tasks across coordinated TrueForge subagents (e.g., Planner Agent, Implementation Agent, Test Verifier Agent, Doc Writer Agent).
 3. **Interactive 3-Way Inline Merge Editor**: Visual conflict resolution directly within the VS Code Diff Editor when simultaneous external edits occur.
 4. **Local Embedding Indexing**: SQLite-vec backed embeddings for semantic retrieval across million-line repositories.
+

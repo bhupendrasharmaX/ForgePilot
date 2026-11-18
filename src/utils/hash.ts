@@ -7,3 +7,4 @@ import * as crypto from 'crypto';
 export function computeSha256(content: string | Buffer): string {
   return crypto.createHash('sha256').update(content).digest('hex');
 }
+

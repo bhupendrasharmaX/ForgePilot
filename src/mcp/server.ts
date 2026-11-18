@@ -247,3 +247,4 @@ export class ForgePilotMcpServer {
     await this.server.connect(transport);
   }
 }
+

@@ -50,3 +50,4 @@ export class SessionManager {
     this.currentSession = null;
   }
 }
+

@@ -14,3 +14,4 @@ export async function cancelAgentTurn(
     vscode.window.showInformationMessage('ForgePilot: No active session to cancel.');
   }
 }
+

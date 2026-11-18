@@ -90,3 +90,4 @@ describe('MCP Tools & Handler', () => {
     ).rejects.toThrow(/User rejected execution/);
   });
 });
+

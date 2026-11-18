@@ -631,3 +631,4 @@ export class AgentPanelProvider implements vscode.WebviewViewProvider {
 </html>`;
   }
 }
+

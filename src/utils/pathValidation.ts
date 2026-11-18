@@ -46,3 +46,4 @@ export function toWorkspaceRelative(workspaceRoot: string, fullPath: string): st
   const rel = path.relative(workspaceRoot, fullPath);
   return rel.replace(/\\/g, '/');
 }
+

@@ -46,3 +46,4 @@ context_engineering:
   compaction: true
   max_retrieval_tokens: 20000
   deferred_tool_schema_loading: true
+

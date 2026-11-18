@@ -130,3 +130,4 @@ Call the \`propose_edit\` tool with path "${relativeFilePath}" and the complete 
     }
   );
 }
+

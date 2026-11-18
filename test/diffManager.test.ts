@@ -99,3 +99,4 @@ describe('DiffManager & Hunk Review', () => {
     expect(proposal.status).toBe('stale');
   });
 });
+

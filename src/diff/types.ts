@@ -37,3 +37,4 @@ export interface UndoRecord {
     appliedContent: string;
   }[];
 }
+
