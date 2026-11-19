@@ -17,7 +17,7 @@ Built from scratch for the **Techfest 2026–27 TrueFoundry Forge-a-thon**.
 - Failing to coordinate multi-file architectural updates
 
 **Crucial Architectural Invariant:**  
-All model reasoning, planning, and tool orchestration **strictly execute through TrueForge** (TrueFoundry's open-source agent harness). The VS Code extension does not host an independent LLM loop and makes zero direct calls to LLM provider APIs.
+All model reasoning, planning, and tool orchestration **strictly execute through TrueForge** (`@truefoundry/trueforge-sdk` v0.185.0). The VS Code extension does not host an independent LLM loop and makes zero direct calls to LLM provider APIs.
 
 ---
 
@@ -36,26 +36,29 @@ All model reasoning, planning, and tool orchestration **strictly execute through
 ## 3. UI Layout & Design
 
 ForgePilot features a dark developer-tool design palette:
-- **Main Background**: `#0D1117`
-- **Sidebar Background**: `#111722`
-- **Panel Background**: `#161E2B`
-- **Elevated Surface**: `#1C2635`
-- **Border**: `#293548`
-- **Accents**: Primary Blue (`#4D8DFF`), Secondary Violet (`#9875FF`), Success (`#2ECC91`), Warning (`#F2B84B`), Error (`#F16C6C`)
+- **Background**: `#0B1220`
+- **Panel / Card Surface**: `#131C2E`
+- **Elevated Surface**: `#19253C`
+- **Border**: `#22304A`
+- **Primary Accent**: `#3ED6C4` (Teal / Cyan)
+- **Secondary Accent**: `#6C8EBF` (Soft Slate Blue)
+- **Status Colors**: Success (`#3ED6A0`), Warning (`#E5A93C`), Error (`#D64545`)
+- **Text**: Main Text (`#E4E9F2`), Secondary Text (`#8B98A9`)
 
 ### Interface Components:
 1. **Activity Bar Icon**: Instant access to the ForgePilot panel.
 2. **Main Agent Sidebar**:
-   - Connection status badge
+   - Connection status badge (`Ready`, `Executing...`, `Error`)
    - Multi-tab navigation: **Agent Chat**, **Diff Review**, **Context Explorer**
-   - Syntax-highlighted messages and streaming text
-   - Collapsible MCP tool execution cards
-   - Textarea with `@file` and `@symbol` helpers, Send and Cancel buttons
+   - Syntax-highlighted messages and streaming text with one-click **Copy Response**
+   - Live Agent Execution Timeline with MCP tool execution cards
+   - Textarea with `@file` and `@symbol` helpers, adaptive Send / Stop Generation button
 3. **Diff Review Panel**: File paths, hunk metadata (`-old,+new`), line additions/deletions, and actions:
    - Accept Hunk / Reject Hunk
    - Accept All / Reject All
-   - Apply Accepted Changes
+   - Apply Approved Changes
    - Transactional Undo
+   - Stale proposal warning banner
 
 ---
 
@@ -65,10 +68,10 @@ ForgePilot features a dark developer-tool design palette:
 flowchart TD
     subgraph VSCode ["Visual Studio Code Extension"]
         ExtActivation["extension.ts & Commands"]
-        SidebarWebview["Agent Webview Sidebar"]
-        InlineEditor["Inline Edit Controller"]
+        SidebarWebview["Agent Webview Sidebar (Chat, Diff, Ctx)"]
+        InlineEditor["Inline Edit Controller (Ctrl+Alt+I)"]
         DiffManager["Diff & Undo Transaction Manager"]
-        ContextEngine["Context Engine (Scanner, Symbols, Ranking)"]
+        ContextEngine["Context Engine (Scanner, Symbols, Ranking, Budget)"]
     end
 
     subgraph MCP ["ForgePilot MCP Server"]
@@ -79,11 +82,11 @@ flowchart TD
         get_git_status, get_file_diff, inspect_project"]
     end
 
-    subgraph TrueForgeHarness ["TrueForge Agent Harness (Local / Remote)"]
-        TFClient["TrueForge Client / SDK"]
-        TFRoutes["Session & Turn Management (/api/v1/sessions)"]
-        SSEStream["SSE Event Streaming"]
-        TFAgent["forgepilot-agent.yaml"]
+    subgraph TrueForgeHarness ["TrueForge Agent Server (Local / Remote)"]
+        TFClient["TrueForge Client (@truefoundry/trueforge-sdk v0.185.0)"]
+        TFRoutes["Sessions API (/api/v1/sessions)"]
+        SSEStream["Turn SSE Event Stream"]
+        TFAgent["forgepilot-agent Definition"]
         ModelFallback["Resilience Engine (Primary / Fallback)"]
     end
 
@@ -107,10 +110,10 @@ flowchart TD
 
 - **Extension Framework**: Visual Studio Code Extension API, TypeScript 5.7+
 - **Runtime**: Node.js 22.14+, npm
-- **Agent Harness**: TrueForge (`@truefoundry/trueforge`, `@truefoundry/trueforge-sdk`)
-- **Tool Protocol**: Model Context Protocol (`@modelcontextprotocol/sdk`)
-- **Diff & Patching**: `diff` library, custom HunkReview engine
-- **Testing**: Vitest 3.2+, Python pytest 8.1+
+- **Agent Harness**: TrueForge (`@truefoundry/trueforge-sdk` v0.185.0)
+- **Tool Protocol**: Model Context Protocol (`@modelcontextprotocol/sdk` v1.6.1)
+- **Diff & Patching**: `diff` v7.0.0, custom HunkReview engine
+- **Testing**: Vitest 3.2.7 (58 tests across 8 suites), Python pytest 8.1+
 - **Version Control**: Git
 
 ---
@@ -143,198 +146,169 @@ npm run compile
 
 ---
 
-## 8. TrueForge Setup
+## 8. TrueForge Setup & Evaluator Guide
 
-Run TrueForge locally:
+### Step 1: Start TrueForge Locally
+Run TrueForge using the official CLI:
 
 ```bash
 npx @truefoundry/trueforge@latest
 ```
 
-This starts the TrueForge harness on `http://localhost:8790` backed by local SQLite storage.
+This starts the TrueForge harness on `http://localhost:8790` backed by local SQLite storage (`%LOCALAPPDATA%\trueforge\Data\db\db.sqlite`).
+
+### Step 2: Configure a Model Provider in TrueForge
+> [!IMPORTANT]
+> Setting environment variables alone (e.g. `GEMINI_API_KEY` or `OPENAI_API_KEY`) does **NOT** automatically register a model provider in TrueForge's internal database.
+> The evaluator must configure an active model provider inside TrueForge:
+> 1. Open `http://localhost:8790` in your web browser.
+> 2. Navigate to **Settings** -> **Model Providers**.
+> 3. Add or update a provider with valid credits:
+>    - **OpenAI**: Add an API key with active credits (e.g., `gpt-4o`, `gpt-4o-mini`).
+>    - **Google**: Add an active Gemini API key (e.g., `gemini-2.5-pro`, `gemini-2.5-flash`).
+> 4. Ensure the agent `forgepilot-agent` is assigned an active, funded model.
 
 ---
 
-## 9. Model Configuration
+## 9. Extension Configuration
 
-Models are managed declaratively through TrueForge. See `examples/model-config.example.yaml`:
-
-```yaml
-trueforge:
-  endpoint: "http://localhost:8790"
-
-models:
-  primary:
-    provider: "google"
-    model_name: "gemini-2.5-pro"
-  fallback:
-    provider: "google"
-    model_name: "gemini-2.5-flash"
-```
-
-In VS Code Settings (`Ctrl+,` or `Cmd+,`), configure:
+In VS Code Settings (`Ctrl+,` or `Cmd+,`), configure under `ForgePilot`:
 - `forgepilot.trueforgeEndpoint`: `http://localhost:8790`
-- `forgepilot.primaryModel`: `gemini-2.5-pro`
+- `forgepilot.apiKey`: *(Optional for local TrueForge)*
+- `forgepilot.primaryModel`: `gemini-2.5-pro` (or your configured model)
 - `forgepilot.fallbackModel`: `gemini-2.5-flash`
 - `forgepilot.tokenBudget`: `20000`
 
 ---
 
-## 10. Agent Definition Setup
+## 10. Agent Definition
 
-The official agent configuration is stored at `agents/forgepilot-agent.yaml`. It links:
-- Model routing
-- 12 MCP Editor tools
-- Approval gates on terminal execution
-- Context compaction directives
+The official agent manifest is at `agents/forgepilot-agent.yaml`:
+- Agent Name: `forgepilot-agent`
+- Connects to 12 MCP Editor tools
+- Configures approval gates for destructive commands
+- Directs context compaction and token boundaries
 
 ---
 
-## 11. MCP Tool Configuration
+## 11. MCP Tool Registry
 
-The MCP server runs via standard stdio and provides:
+The MCP handler exposes 12 core tools:
 
 | Tool Name | Purpose | Security Gate |
 |---|---|---|
 | `search_workspace` | Search text/symbols across workspace | Sandboxed |
 | `list_files` | List directory contents | Path Traversal Protection |
-| `read_file` | Read line ranges within file | Path Traversal Protection |
-| `get_symbols` | Extract function/class declarations | Sandboxed |
-| `get_references` | Search symbol references | Sandboxed |
-| `get_workspace_context` | Workspace root, git branch, project type | Sandboxed |
-| `propose_edit` | Propose edits without disk writes | Non-destructive |
-| `run_command` | Execute shell commands | **Developer Approval Required** |
-| `run_tests` | Run pytest / npm test suites | Sandboxed |
-| `get_git_status` | Retrieve `git status --short` | Sandboxed |
-| `get_file_diff` | View active proposals and hunks | Sandboxed |
-| `inspect_project` | Detect manifests (package.json, pyproject.toml) | Sandboxed |
+| `read_file` | Read file content safely | Path Traversal Protection |
+| `get_symbols` | Extract function/class/method symbols | Read-Only |
+| `get_references` | Search references to a symbol | Read-Only |
+| `get_workspace_context` | Workspace summary & structure | Read-Only |
+| `propose_edit` | Stage diff proposal (no direct disk write) | Two-Phase Approval Gate |
+| `run_command` | Execute shell command | Explicit Confirmation Required |
+| `run_tests` | Run test suite via pytest/npm | Read-Only Test Runner |
+| `get_git_status` | Query uncommitted changes | Read-Only |
+| `get_file_diff` | View working copy diffs | Read-Only |
+| `inspect_project` | Analyze project manifest & dependencies | Read-Only |
 
 ---
 
-## 12. VS Code Extension Setup
+## 12. Verification & Testing Matrix
 
-To run ForgePilot in VS Code Development Host:
-1. Open the `ForgePilot` directory in VS Code.
-2. Press `F5` (or select **Run** -> **Start Debugging**).
-3. In the newly launched Extension Development Host window, click the **ForgePilot** icon in the Activity Bar.
+ForgePilot enforces rigorous labeling of test and execution results:
+
+| Verification Category | Verified Capabilities | Evidence |
+|---|---|---|
+| **LIVE VERIFIED** | • TrueForge session creation<br>• Server-side cancellation | `session` and `turn` records in TrueForge `db.sqlite` (turn `01m7qzxbp8dey59qfbppzekr7e` logged `status: 'cancelled', reason: 'client-cancelled'`) |
+| **AUTOMATED TEST VERIFIED** | • Official SDK turn streaming<br>• MCP tool handling<br>• Context retrieval engine<br>• Two-phase diff review & undo<br>• Inline edit command (`Ctrl+Alt+I`)<br>• Resilience retry & failover logic | 58 tests across 8 test suites in Vitest (`npm test`) passing with 100% success rate |
+| **DETERMINISTIC VERIFIED** | • Task A acceptance command<br>• Task B multi-file discovery<br>• Task B test execution & CLI help | Acceptance scripts executed against disposable Flask 3.1.3 working copies |
+| **NOT VERIFIED LIVE** | • Live LLM completion for Task A<br>• Live LLM autonomous Task B<br>• Live failover to Gemini | Upstream OpenAI provider on local server encountered HTTP 429 (`insufficient_quota`). No Google provider registered in TrueForge database. |
 
 ---
 
-## 13. Development Commands
+## 13. Running Automated Tests
+
+Run the complete 58-test suite:
 
 ```bash
-# Compile TypeScript
+npm test
+```
+
+Expected output:
+```text
+Test Files  8 passed (8)
+     Tests  58 passed (58)
+  Duration  ~48s
+```
+
+Compile and lint:
+```bash
 npm run compile
-
-# Watch mode
-npm run watch
-
-# Type-check / Lint
 npm run lint
-
-# Run all automated tests
-npm test
 ```
 
 ---
 
-## 14. Testing
+## 14. Official Flask Task Acceptance Evidence
 
-All unit and integration tests are powered by Vitest:
-
-```bash
-npm test
-```
-
-Output:
-```
- ✓ test/trueforge.test.ts (3 tests)
- ✓ test/contextEngine.test.ts (4 tests)
- ✓ test/diffManager.test.ts (4 tests)
- ✓ test/mcpTools.test.ts (5 tests)
- ✓ test/competitionTasks.test.ts (3 tests)
-
- Test Files  5 passed (5)
-      Tests  19 passed (19)
-```
-
----
-
-## 15. Official Flask Task Verification
-
-Verified on repository `https://github.com/pallets/flask` at tag `3.1.3` (commit `22d92470`):
+Verified on Pallets Flask at tag `3.1.3` (commit `22d924701a6ae2e4cd01e9a15bbaf3946094af65`):
 
 ### TASK A — INLINE EDIT
 - **Target**: `src/flask/helpers.py` (`get_debug_flag`)
 - **Instruction**: *"Treat the values 'off' and 'n' as false as well, case-insensitively, and update the docstring to list every value that is treated as false."*
-- **Outcome**: Inline edit proposed, diff reviewed, accepted, and applied.
-- **Verification**:
+- **Acceptance Command**:
   ```bash
   FLASK_DEBUG=off python -c "from flask.helpers import get_debug_flag; print(get_debug_flag())"
-  # Output: False
-  FLASK_DEBUG=n python -c "from flask.helpers import get_debug_flag; print(get_debug_flag())"
-  # Output: False
-  FLASK_DEBUG=OFF python -c "from flask.helpers import get_debug_flag; print(get_debug_flag())"
-  # Output: False
   ```
+- **Output**: `False`
+- **Additional Verification**: `'n'`, `'OFF'`, `'N'` return `False`; `'1'`, `'true'` return `True`.
+- **Status**: **DETERMINISTIC VERIFIED (PASS)**
 
 ### TASK B — AUTONOMOUS MULTI-FILE AGENT
 - **Instruction**: *"Add a new built-in CLI command flask config that prints the loaded application's configuration as JSON, masking the values of any key containing SECRET, PASSWORD, TOKEN or KEY as '***'. It must appear in flask --help, be covered by a test, and be documented alongside the other built-in commands."*
-- **Outcome**: Agent discovered 3 distinct files autonomously:
-  1. `src/flask/cli.py` (implemented `config` command with sensitive key masking)
-  2. `tests/test_cli.py` (added test covering `flask config` and masked keys)
-  3. `docs/cli.rst` (documented command alongside `run`, `shell`, `routes`)
-- **Verification**:
+- **Discovered Files**:
+  1. `src/flask/cli.py` (CLI implementation with key masking)
+  2. `tests/test_cli.py` (Pytest coverage)
+  3. `docs/cli.rst` (Documentation)
+- **Verification Commands**:
   ```bash
   pytest tests/test_cli.py -k test_config_command -q
-  # Output: 1 passed
+  # Output: 1 passed, 58 deselected in 0.37s
+
   flask --help
   # Output includes: config   Show loaded configuration as JSON.
   ```
+- **Status**: **DETERMINISTIC VERIFIED (PASS)**
 
-### TASK C — RESILIENCE
-- **Setup**: Configured TrueForge client with unreachable endpoint and invalid key.
+### TASK C — RESILIENCE & WORKSPACE PROTECTION
+- **Setup**: Configured client with dead endpoint `http://127.0.0.1:59999` and invalid key.
 - **Outcome**:
-  - Editor stayed completely responsive.
-  - ResilienceManager retried with exponential backoff and failed over cleanly.
-  - Clear user notification presented.
-  - Zero unapproved file modifications made (`git status --short` clean).
+  - ResilienceManager retried with backoff and halted safely.
+  - Informative error surfaced in chat timeline.
+  - Zero unapproved file modifications made (`git status --short flask` returned empty).
+- **Status**: **AUTOMATED TEST VERIFIED (PASS)**
 
 ---
 
-## 16. Model Information & Approximate Costs
+## 15. Known Limitations & Future Improvements
 
-- **Primary Model**: `gemini-2.5-pro` (Input: \$1.25 / 1M tokens, Output: \$5.00 / 1M tokens)
-- **Fallback Model**: `gemini-2.5-flash` (Input: \$0.075 / 1M tokens, Output: \$0.30 / 1M tokens)
-- **Average Task Cost**:
-  - Task A (Inline Edit): ~1,200 tokens (< \$0.003)
-  - Task B (Autonomous Multi-File): ~8,500 tokens (< \$0.015)
-  - Task C (Resilience): \$0.00 (Failed connection, zero model tokens consumed)
+### Current Limitations:
+1. **Upstream Provider Quota**: Live model reasoning requires funded API keys in TrueForge. When the provider returns HTTP 429, turns halt safely without crashing.
+2. **Conflict Resolution**: When external file changes conflict with an active proposal, ForgePilot flags the proposal as stale rather than opening an interactive 3-way merge editor.
+3. **Regex Lexical Extraction**: Symbol indexing uses lexical parsing for Python, TypeScript, and JavaScript rather than full LSP call graphs.
 
----
-
-## 17. Upstream Fork Information
-
-ForgePilot was **built completely from scratch**. It is not a fork of any existing extension or agent repository.
+### With Another Month:
+1. **LSP Semantic Graph**: Connect to VS Code's active Language Server Protocol for type-aware cross-file symbol indexing.
+2. **In-Webview Diff Editing**: Allow developers to edit proposed lines directly in the diff viewer before clicking Apply.
+3. **Closed-Loop Test Healing**: Automatically feed failing test outputs back to TrueForge to iterate on edits until tests pass.
 
 ---
 
-## 18. Known Limitations
+## 16. Upstream Fork Disclosure
 
-- Language symbol indexing currently features deep AST-style extractors for Python, TypeScript, and JavaScript; other languages utilize lexical pattern matching.
-- Terminal commands require user approval on each unique invocation by default.
-
----
-
-## 19. Future Improvements
-
-- Tree-sitter native WASM bindings for universal symbol extraction across 40+ programming languages.
-- Visual side-by-side three-way merge resolution for conflicting simultaneous external modifications.
-- Multi-agent parallel reviews using TrueForge subagents.
+ForgePilot was **built completely from scratch** specifically for the TrueFoundry Forge-a-thon. It is not a fork or derivative of Cline, Continue, Aider, or Cursor.
 
 ---
 
-## 20. License
+## 17. License
 
 Permissive Open Source License — see `LICENSE` file.
-

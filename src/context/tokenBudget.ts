@@ -41,16 +41,19 @@ export class TokenBudgetManager {
    */
   public allocateBudget(
     candidates: Array<{ filePath: string; content: string; score: number }>,
-    reservedTokens: number = 3000 // Reserved for system prompt, history, tool defs
+    reservedTokens: number = 3000,
+    preserveOrder: boolean = false
   ): { allocations: TokenAllocation[]; totalTokens: number; budgetRemaining: number } {
     const usableBudget = Math.max(1000, this.maxTokens - reservedTokens);
     let currentTokens = 0;
     const allocations: TokenAllocation[] = [];
 
-    // Sort by descending score
-    const sorted = [...candidates].sort((a, b) => b.score - a.score);
+    // Respect deliberate candidate order if preserveOrder is true; otherwise sort by score
+    const ordered = preserveOrder
+      ? [...candidates]
+      : [...candidates].sort((a, b) => b.score - a.score);
 
-    for (const item of sorted) {
+    for (const item of ordered) {
       const fileTokens = this.estimateTokens(item.content);
 
       if (currentTokens + fileTokens <= usableBudget) {

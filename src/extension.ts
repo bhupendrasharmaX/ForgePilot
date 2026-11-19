@@ -94,6 +94,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('forgepilot.newSession', async () => {
       await agentPanelProvider.handleNewSession();
       vscode.window.showInformationMessage('ForgePilot: Started new TrueForge session.');
+    }),
+    vscode.commands.registerCommand('forgepilot.showDiffProposal', (proposalId: string) => {
+      agentPanelProvider.showProposal(proposalId);
     })
   );
 

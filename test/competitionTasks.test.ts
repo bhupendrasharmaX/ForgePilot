@@ -12,21 +12,28 @@ import { ResilienceManager } from '../src/services/fallback';
 const execAsync = promisify(exec);
 
 describe('Official Flask 3.1.3 Competition Verification', () => {
-  const flaskRoot = path.resolve(__dirname, '../flask');
+  const originalFlaskRoot = path.resolve(__dirname, '../flask');
+  const flaskRoot = path.resolve(__dirname, '../tmp_flask_acceptance');
   let diffManager: DiffManager;
   let mcpHandler: McpToolHandler;
   let contextEngine: ContextRetrievalEngine;
 
   beforeEach(() => {
+    if (fs.existsSync(flaskRoot)) {
+      fs.rmSync(flaskRoot, { recursive: true, force: true });
+    }
+    fs.cpSync(originalFlaskRoot, flaskRoot, { recursive: true });
     diffManager = new DiffManager(flaskRoot);
     mcpHandler = new McpToolHandler(flaskRoot, diffManager);
     contextEngine = new ContextRetrievalEngine(flaskRoot, 20000);
   });
 
   afterEach(async () => {
-    // Reset flask repository to clean HEAD after tests
+    // Safely remove disposable working copy without touching original flask repo
     try {
-      await execAsync('git checkout . && git clean -fd', { cwd: flaskRoot });
+      if (fs.existsSync(flaskRoot)) {
+        fs.rmSync(flaskRoot, { recursive: true, force: true });
+      }
     } catch {}
   });
 

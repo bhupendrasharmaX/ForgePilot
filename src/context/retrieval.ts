@@ -13,6 +13,7 @@ export interface RetrievedContext {
   discoveredSymbols: CodeSymbol[];
   explanation: {
     filePath: string;
+    category: 'source' | 'test' | 'documentation' | 'configuration' | 'other';
     reason: string;
     score: number;
   }[];
@@ -35,6 +36,10 @@ export class ContextRetrievalEngine {
 
   public setMaxTokens(tokens: number): void {
     this.budgetManager.setMaxTokens(tokens);
+  }
+
+  public getMaxTokens(): number {
+    return this.budgetManager.getMaxTokens();
   }
 
   /**
@@ -136,17 +141,43 @@ export class ContextRetrievalEngine {
   }
 
   /**
+   * Categorizes a file path into its architectural role.
+   */
+  private categorizeFile(relPath: string): 'source' | 'test' | 'documentation' | 'configuration' | 'other' {
+    const lower = relPath.toLowerCase().replace(/\\/g, '/');
+    if (lower.includes('test') || lower.includes('spec')) {
+      return 'test';
+    }
+    if (lower.startsWith('docs/') || lower.endsWith('.rst') || lower.endsWith('.md')) {
+      return 'documentation';
+    }
+    if (
+      lower.endsWith('.json') ||
+      lower.endsWith('.toml') ||
+      lower.endsWith('.yaml') ||
+      lower.endsWith('.yml') ||
+      lower.includes('config')
+    ) {
+      return 'configuration';
+    }
+    if (lower.startsWith('src/') || lower.endsWith('.py') || lower.endsWith('.ts') || lower.endsWith('.js')) {
+      return 'source';
+    }
+    return 'other';
+  }
+
+  /**
    * Retrieves context tailored to the user's task.
    */
   public async retrieveContext(userPrompt: string): Promise<RetrievedContext> {
     const { explicitFiles, explicitSymbols } = this.parseMentions(userPrompt);
 
-    // Extract keywords (filter small words)
+    // Extract significant keywords (exclude tiny stop words)
     const keywords = userPrompt
       .toLowerCase()
       .replace(/[^a-zA-Z0-9_\s]/g, ' ')
       .split(/\s+/)
-      .filter((w) => w.length > 2 && !['the', 'and', 'for', 'with', 'that', 'this'].includes(w));
+      .filter((w) => w.length > 2 && !['the', 'and', 'for', 'with', 'that', 'this', 'must', 'from'].includes(w));
 
     const testIntent =
       userPrompt.toLowerCase().includes('test') ||
@@ -155,6 +186,7 @@ export class ContextRetrievalEngine {
 
     const docIntent =
       userPrompt.toLowerCase().includes('doc') ||
+      userPrompt.toLowerCase().includes('documented') ||
       userPrompt.toLowerCase().includes('documentation') ||
       userPrompt.toLowerCase().includes('readme');
 
@@ -172,17 +204,16 @@ export class ContextRetrievalEngine {
       }
     }
 
-    // Index symbols
+    // Index code symbols
     this.symbolIndex.indexWorkspaceFiles(
       loadedFiles.map((f) => ({ filePath: f.relativePath, content: f.content }))
     );
 
-    // Match symbols
+    // Match symbols from mentions and prominent keywords
     const discoveredSymbols: CodeSymbol[] = [];
     for (const symName of explicitSymbols) {
       discoveredSymbols.push(...this.symbolIndex.findSymbols(symName));
     }
-    // Also search keywords for symbol names
     for (const kw of keywords) {
       discoveredSymbols.push(...this.symbolIndex.findSymbols(kw));
     }
@@ -192,22 +223,32 @@ export class ContextRetrievalEngine {
       filePath: string;
       content: string;
       score: number;
+      category: 'source' | 'test' | 'documentation' | 'configuration' | 'other';
       reason: string;
     }> = [];
 
     for (const file of loadedFiles) {
+      const normalizedPath = file.relativePath.replace(/\\/g, '/');
       const isExplicit = explicitFiles.some((ef) =>
-        file.relativePath.toLowerCase().endsWith(ef.toLowerCase())
+        normalizedPath.toLowerCase().endsWith(ef.toLowerCase())
       );
 
-      const baseName = path.basename(file.relativePath).toLowerCase();
-      const baseStem = path.basename(file.relativePath, path.extname(file.relativePath)).toLowerCase();
-      const isFileNameMatch = keywords.some(
-        (kw) => kw === baseName || kw === baseStem || baseName.includes(kw)
+      const baseName = path.basename(normalizedPath).toLowerCase();
+      const baseStem = path.basename(normalizedPath, path.extname(normalizedPath)).toLowerCase();
+      const cleanStem = baseStem.replace(/^test_/, '').replace(/_test$/, '');
+
+      // Check if keyword matches exact file name or stem (e.g. "cli" matching "cli.py", "test_cli.py", "cli.rst")
+      const isStemMatch = keywords.some(
+        (kw) => kw === baseStem || kw === cleanStem
+      );
+      const isFileNameMatch = isStemMatch || keywords.some(
+        (kw) => kw === baseName || baseName.includes(kw)
       );
 
       // Symbol matches in this file
-      const fileSymbols = discoveredSymbols.filter((s) => s.filePath === file.relativePath);
+      const fileSymbols = discoveredSymbols.filter(
+        (s) => s.filePath.replace(/\\/g, '/') === normalizedPath
+      );
 
       // Keyword matches in content
       const lowerContent = file.content.toLowerCase();
@@ -216,19 +257,21 @@ export class ContextRetrievalEngine {
         if (lowerContent.includes(kw)) kwCount++;
       }
 
-      const isTest = file.relativePath.includes('test') || file.relativePath.includes('spec');
-      const isDoc =
-        file.relativePath.includes('doc') ||
-        file.relativePath.endsWith('.md') ||
-        file.relativePath.endsWith('.rst');
-      const depth = file.relativePath.split('/').length;
+      const category = this.categorizeFile(normalizedPath);
+      const isTest = category === 'test';
+      const isDoc = category === 'documentation';
+      const isSource = category === 'source' || normalizedPath.startsWith('src/');
+      const depth = normalizedPath.split('/').length;
 
       const factor: RankingFactor = {
-        filePath: file.relativePath,
+        filePath: normalizedPath,
         explicitMention: isExplicit,
+        exactPathMatch: explicitFiles.some((ef) => normalizedPath.toLowerCase() === ef.toLowerCase()),
         fileNameMatch: isFileNameMatch,
+        stemMatch: isStemMatch,
         symbolMatchCount: fileSymbols.length,
         keywordMatchCount: kwCount,
+        isSourceFile: isSource,
         isTestFile: isTest,
         isDocFile: isDoc,
         fileDepth: depth
@@ -238,30 +281,79 @@ export class ContextRetrievalEngine {
 
       const reasons: string[] = [];
       if (isExplicit) reasons.push('Explicitly mentioned in prompt');
-      if (isFileNameMatch) reasons.push(`Matches file name in query (${baseName})`);
+      if (isStemMatch) reasons.push(`Matches query target stem ("${cleanStem}")`);
+      else if (isFileNameMatch) reasons.push(`Matches file name query ("${baseName}")`);
       if (fileSymbols.length > 0)
-        reasons.push(`Contains matching symbols: ${fileSymbols.map((s) => s.name).join(', ')}`);
+        reasons.push(`Contains matching symbols: ${fileSymbols.slice(0, 3).map((s) => s.name).join(', ')}`);
       if (kwCount > 0) reasons.push(`Matches ${kwCount} query keywords`);
       if (testIntent && isTest) reasons.push('Relevant test suite');
       if (docIntent && isDoc) reasons.push('Relevant documentation');
 
       if (score > 10 || isExplicit || fileSymbols.length > 0) {
         scoredCandidates.push({
-          filePath: file.relativePath,
+          filePath: normalizedPath,
           content: file.content,
           score,
+          category,
           reason: reasons.join('; ') || 'Workspace relevance match'
         });
       }
     }
 
-    // Allocate budget
-    const budgetResult = this.budgetManager.allocateBudget(scoredCandidates);
+    // Multi-domain balanced prioritization:
+    // When the prompt calls for implementation, testing, and documentation,
+    // ensure the top representative candidate from each domain is guaranteed priority.
+    const priorityCandidates: typeof scoredCandidates = [];
+    const remainingCandidates: typeof scoredCandidates = [];
+
+    const bestSource = scoredCandidates
+      .filter((c) => c.category === 'source')
+      .sort((a, b) => b.score - a.score)[0];
+    const bestTest = testIntent
+      ? scoredCandidates
+          .filter((c) => c.category === 'test')
+          .sort((a, b) => b.score - a.score)[0]
+      : undefined;
+    const bestDoc = docIntent
+      ? scoredCandidates
+          .filter((c) => c.category === 'documentation')
+          .sort((a, b) => b.score - a.score)[0]
+      : undefined;
+
+    const prioritizedPaths = new Set<string>();
+    if (bestSource) {
+      priorityCandidates.push(bestSource);
+      prioritizedPaths.add(bestSource.filePath);
+    }
+    if (bestTest && !prioritizedPaths.has(bestTest.filePath)) {
+      priorityCandidates.push(bestTest);
+      prioritizedPaths.add(bestTest.filePath);
+    }
+    if (bestDoc && !prioritizedPaths.has(bestDoc.filePath)) {
+      priorityCandidates.push(bestDoc);
+      prioritizedPaths.add(bestDoc.filePath);
+    }
+
+    for (const c of scoredCandidates) {
+      if (!prioritizedPaths.has(c.filePath)) {
+        remainingCandidates.push(c);
+      }
+    }
+
+    // Sort remaining by score
+    remainingCandidates.sort((a, b) => b.score - a.score);
+
+    // Combine prioritized first, then remainder
+    const orderedCandidates = [...priorityCandidates, ...remainingCandidates];
+
+    // Allocate budget (preserve deliberate multi-domain prioritization order)
+    const budgetResult = this.budgetManager.allocateBudget(orderedCandidates, 3000, true);
 
     const explanation = budgetResult.allocations.map((alloc) => {
       const match = scoredCandidates.find((c) => c.filePath === alloc.filePath);
       return {
         filePath: alloc.filePath,
+        category: match?.category || 'other',
         reason: match?.reason || 'Relevance score ranking',
         score: alloc.score
       };

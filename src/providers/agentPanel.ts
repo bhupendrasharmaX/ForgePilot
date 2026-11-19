@@ -1,9 +1,184 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
 import { TrueForgeClient } from '../services/trueforge';
 import { ResilienceManager } from '../services/fallback';
 import { SessionManager } from '../services/sessionManager';
 import { DiffManager } from '../diff/diffManager';
 import { ContextRetrievalEngine } from '../context/retrieval';
+import { ProposedEdit, DiffHunk } from '../diff/types';
+import { computeSha256 } from '../utils/hash';
+
+export interface SerializedProposal {
+  id: string;
+  filePath: string;
+  absolutePath: string;
+  status: string;
+  isStale: boolean;
+  staleReason?: string;
+  mode: 'Autonomous Agent' | 'Inline Edit';
+  summary?: string;
+  addedLines: number;
+  deletedLines: number;
+  totalHunks: number;
+  acceptedHunks: number;
+  rejectedHunks: number;
+  pendingHunks: number;
+  hunks: {
+    id: string;
+    oldStart: number;
+    oldLines: number;
+    newStart: number;
+    newLines: number;
+    lines: string[];
+    status: 'pending' | 'accepted' | 'rejected';
+  }[];
+}
+
+export interface TimelineEvent {
+  id: string;
+  eventType:
+    | 'agent_started'
+    | 'context_retrieval'
+    | 'files_discovered'
+    | 'tool_call'
+    | 'tool_result'
+    | 'diff_proposal'
+    | 'turn_complete'
+    | 'cancelled'
+    | 'error';
+  title: string;
+  detail: string;
+  data?: any;
+  status: 'running' | 'completed' | 'warning' | 'error';
+  timestamp: number;
+}
+
+export function sanitizeToolInput(tool: string, input: any): any {
+  if (!input || typeof input !== 'object') return input;
+  const clone = JSON.parse(JSON.stringify(input));
+  const sensitiveKeys = ['apikey', 'secret', 'password', 'token', 'key', 'auth', 'credentials'];
+
+  function maskObject(obj: any): void {
+    if (!obj || typeof obj !== 'object') return;
+    for (const k of Object.keys(obj)) {
+      if (sensitiveKeys.some((s) => k.toLowerCase().includes(s))) {
+        obj[k] = '***';
+      } else if (typeof obj[k] === 'object') {
+        maskObject(obj[k]);
+      }
+    }
+  }
+
+  maskObject(clone);
+  return clone;
+}
+
+export function formatToolSummary(tool: string, result: any): string {
+  if (!result) return 'Completed with empty result';
+  if (result.error) return `Error: ${result.error}`;
+  if (tool === 'list_files') {
+    const count = Array.isArray(result.files) ? result.files.length : Array.isArray(result) ? result.length : 0;
+    return `Discovered ${count} file(s) in workspace`;
+  }
+  if (tool === 'search_workspace') {
+    const count = Array.isArray(result.matches) ? result.matches.length : Array.isArray(result) ? result.length : 0;
+    return `Found ${count} matching code segment(s)`;
+  }
+  if (tool === 'read_file') {
+    const lineCount = typeof result.content === 'string' ? result.content.split('\n').length : 0;
+    return `Read file content (${lineCount} lines)`;
+  }
+  if (tool === 'get_symbols') {
+    const count = Array.isArray(result.symbols) ? result.symbols.length : 0;
+    return `Extracted ${count} symbol definition(s)`;
+  }
+  if (tool === 'get_references') {
+    const count = Array.isArray(result.references) ? result.references.length : 0;
+    return `Found ${count} symbol reference(s)`;
+  }
+  if (tool === 'propose_edit') {
+    return `Created diff proposal for ${result.filePath || 'file'}`;
+  }
+  return 'MCP tool execution completed successfully';
+}
+
+export function checkProposalStale(proposal: ProposedEdit): { isStale: boolean; reason?: string } {
+  if (proposal.status === 'applied') {
+    return { isStale: false };
+  }
+  if (!fs.existsSync(proposal.absolutePath)) {
+    if (proposal.originalContent.length > 0) {
+      return { isStale: true, reason: 'File has been deleted from disk since proposal creation.' };
+    }
+    return { isStale: false };
+  }
+  try {
+    const currentDiskContent = fs.readFileSync(proposal.absolutePath, 'utf8');
+    const currentHash = computeSha256(currentDiskContent);
+    if (currentHash !== proposal.originalSha256) {
+      return {
+        isStale: true,
+        reason: 'File on disk has been modified since this proposal was created. Applying may conflict.'
+      };
+    }
+  } catch {
+    // Disk read fallback
+  }
+  return { isStale: false };
+}
+
+export function serializeProposal(proposal: ProposedEdit): SerializedProposal {
+  const staleCheck = checkProposalStale(proposal);
+
+  let addedLines = 0;
+  let deletedLines = 0;
+  let acceptedHunks = 0;
+  let rejectedHunks = 0;
+  let pendingHunks = 0;
+
+  for (const hunk of proposal.hunks) {
+    if (hunk.status === 'accepted') acceptedHunks++;
+    else if (hunk.status === 'rejected') rejectedHunks++;
+    else pendingHunks++;
+
+    for (const line of hunk.lines) {
+      if (line.startsWith('+')) addedLines++;
+      else if (line.startsWith('-')) deletedLines++;
+    }
+  }
+
+  const isInline =
+    proposal.summary?.includes('Inline Edit') ||
+    proposal.id.includes('inline') ||
+    proposal.sessionId?.includes('inline');
+
+  return {
+    id: proposal.id,
+    filePath: proposal.filePath,
+    absolutePath: proposal.absolutePath,
+    status: staleCheck.isStale ? 'stale' : proposal.status,
+    isStale: staleCheck.isStale,
+    staleReason: staleCheck.reason,
+    mode: isInline ? 'Inline Edit' : 'Autonomous Agent',
+    summary: proposal.summary,
+    addedLines,
+    deletedLines,
+    totalHunks: proposal.hunks.length,
+    acceptedHunks,
+    rejectedHunks,
+    pendingHunks,
+    hunks: proposal.hunks.map((h) => ({
+      id: h.id,
+      oldStart: h.oldStart,
+      oldLines: h.oldLines,
+      newStart: h.newStart,
+      newLines: h.newLines,
+      lines: h.lines,
+      status: h.status
+    }))
+  };
+}
 
 export class AgentPanelProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'forgepilot.agentView';
@@ -17,11 +192,8 @@ export class AgentPanelProvider implements vscode.WebviewViewProvider {
     private readonly diffManager: DiffManager,
     private readonly contextEngine: ContextRetrievalEngine
   ) {
-    this.diffManager.onDidChangeProposals((proposals) => {
-      this.postMessage({
-        type: 'proposalsUpdated',
-        proposals
-      });
+    this.diffManager.onDidChangeProposals(() => {
+      this.broadcastProposals();
     });
   }
 
@@ -80,7 +252,7 @@ export class AgentPanelProvider implements vscode.WebviewViewProvider {
     // Send initial status
     this.postMessage({
       type: 'init',
-      proposals: this.diffManager.listProposals(),
+      proposals: this.getSerializedProposals(),
       canUndo: this.diffManager.canUndo(),
       config: this.trueforgeClient.getConfig()
     });
@@ -92,34 +264,88 @@ export class AgentPanelProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  public showProposal(proposalId: string): void {
+    this.postMessage({
+      type: 'showProposal',
+      proposalId
+    });
+  }
+
+  public getSerializedProposals(): SerializedProposal[] {
+    return this.diffManager.listProposals().map((p) => serializeProposal(p));
+  }
+
+  public broadcastProposals(): void {
+    this.postMessage({
+      type: 'proposalsUpdated',
+      proposals: this.getSerializedProposals(),
+      canUndo: this.diffManager.canUndo()
+    });
+  }
+
   public async handleUserMessage(promptText: string, mode: string = 'agent'): Promise<void> {
     if (!promptText.trim()) return;
+
+    const startTime = Date.now();
 
     this.postMessage({
       type: 'userMessage',
       text: promptText,
-      mode
+      mode,
+      timestamp: startTime
     });
 
     this.postMessage({ type: 'statusChange', status: 'busy' });
 
     try {
-      const session = await this.sessionManager.getOrCreateSession();
+      const session = await this.sessionManager.getOrCreateSession(
+        mode === 'inline' ? 'Inline Edit Session' : 'Autonomous Agent Session'
+      );
+
+      this.postMessage({
+        type: 'timelineEvent',
+        event: {
+          id: `start-${Date.now()}`,
+          eventType: 'agent_started',
+          title: 'Agent Turn Initialized',
+          detail: `Connected to TrueForge session ${session.id}`,
+          status: 'running',
+          timestamp: Date.now()
+        } as TimelineEvent
+      });
 
       // Retrieve repository context
       const context = await this.contextEngine.retrieveContext(promptText);
 
+      const tokenBudget = this.contextEngine.getMaxTokens();
       this.postMessage({
         type: 'contextRetrieved',
         context: {
           totalTokens: context.totalTokens,
+          tokenBudget,
+          percentage: Math.min(100, Math.round((context.totalTokens / tokenBudget) * 100)),
           files: context.allocations.map((a) => a.filePath),
+          allocations: context.allocations,
           explanation: context.explanation
         }
       });
 
+      this.postMessage({
+        type: 'timelineEvent',
+        event: {
+          id: `ctx-${Date.now()}`,
+          eventType: 'context_retrieval',
+          title: 'Context Retrieval Engine',
+          detail: `Analyzed codebase & assembled ${context.allocations.length} file(s) (${context.totalTokens} tokens)`,
+          data: context.allocations.map((a) => a.filePath),
+          status: 'completed',
+          timestamp: Date.now()
+        } as TimelineEvent
+      });
+
       // Stream turn through TrueForge with resilience fallback
       let fullResponse = '';
+      const callToolMap = new Map<string, string>();
       for await (const event of this.resilienceManager.executeWithResilience(
         session.id,
         promptText,
@@ -132,31 +358,119 @@ export class AgentPanelProvider implements vscode.WebviewViewProvider {
             delta: event.delta
           });
         } else if (event.type === 'tool_call' && event.toolCall) {
+          callToolMap.set(event.toolCall.callId, event.toolCall.tool);
+          const sanitizedInput = sanitizeToolInput(event.toolCall.tool, event.toolCall.input);
           this.postMessage({
             type: 'toolCall',
-            toolCall: event.toolCall
+            toolCall: {
+              ...event.toolCall,
+              input: sanitizedInput
+            }
+          });
+
+          this.postMessage({
+            type: 'timelineEvent',
+            event: {
+              id: `call-${event.toolCall.callId}`,
+              eventType: 'tool_call',
+              title: `MCP Tool: ${event.toolCall.tool}`,
+              detail: JSON.stringify(sanitizedInput, null, 2),
+              status: 'running',
+              timestamp: Date.now()
+            } as TimelineEvent
           });
         } else if (event.type === 'tool_result' && event.toolResult) {
+          const toolName = callToolMap.get(event.toolResult.callId) || 'tool';
+          const summary = formatToolSummary(toolName, event.toolResult.result);
           this.postMessage({
             type: 'toolResult',
-            toolResult: event.toolResult
+            toolResult: {
+              ...event.toolResult,
+              tool: toolName
+            },
+            summary
           });
+
+          this.postMessage({
+            type: 'timelineEvent',
+            event: {
+              id: `res-${event.toolResult.callId}`,
+              eventType: 'tool_result',
+              title: `MCP Tool Result: ${toolName}`,
+              detail: summary,
+              status: 'completed',
+              timestamp: Date.now()
+            } as TimelineEvent
+          });
+
+          if (toolName === 'propose_edit' && event.toolResult.result?.proposalId) {
+            this.postMessage({
+              type: 'timelineEvent',
+              event: {
+                id: `prop-${event.toolResult.result.proposalId}`,
+                eventType: 'diff_proposal',
+                title: 'Diff Proposal Created',
+                detail: `Registered proposed modification for ${event.toolResult.result.filePath || 'file'} pending review`,
+                data: { proposalId: event.toolResult.result.proposalId },
+                status: 'completed',
+                timestamp: Date.now()
+              } as TimelineEvent
+            });
+          }
         } else if (event.type === 'error') {
           this.postMessage({
             type: 'agentError',
             error: event.error
           });
+
+          this.postMessage({
+            type: 'timelineEvent',
+            event: {
+              id: `err-${Date.now()}`,
+              eventType: 'error',
+              title: 'Execution Error',
+              detail: event.error || 'Turn execution failed',
+              status: 'error',
+              timestamp: Date.now()
+            } as TimelineEvent
+          });
         } else if (event.type === 'cancelled') {
           this.postMessage({
             type: 'agentCancelled',
-            message: event.error || 'Turn cancelled'
+            message: event.error || 'Turn cancelled by user'
+          });
+
+          this.postMessage({
+            type: 'timelineEvent',
+            event: {
+              id: `canc-${Date.now()}`,
+              eventType: 'cancelled',
+              title: 'Execution Cancelled',
+              detail: 'Turn was stopped on server',
+              status: 'warning',
+              timestamp: Date.now()
+            } as TimelineEvent
           });
         }
       }
 
+      const durationMs = Date.now() - startTime;
       this.postMessage({
         type: 'turnComplete',
-        response: fullResponse
+        response: fullResponse,
+        durationMs
+      });
+
+      this.postMessage({
+        type: 'timelineEvent',
+        event: {
+          id: `done-${Date.now()}`,
+          eventType: 'turn_complete',
+          title: 'Turn Completed',
+          detail: `TrueForge agent finished in ${(durationMs / 1000).toFixed(1)}s`,
+          status: 'completed',
+          timestamp: Date.now()
+        } as TimelineEvent
       });
     } catch (err: any) {
       this.postMessage({
@@ -182,7 +496,8 @@ export class AgentPanelProvider implements vscode.WebviewViewProvider {
     this.diffManager.clear();
     this.postMessage({
       type: 'newSessionCreated',
-      session
+      session,
+      proposals: []
     });
   }
 
@@ -201,6 +516,7 @@ export class AgentPanelProvider implements vscode.WebviewViewProvider {
       result,
       canUndo: this.diffManager.canUndo()
     });
+    this.broadcastProposals();
   }
 
   public async handleUndo(): Promise<void> {
@@ -215,6 +531,7 @@ export class AgentPanelProvider implements vscode.WebviewViewProvider {
       result,
       canUndo: this.diffManager.canUndo()
     });
+    this.broadcastProposals();
   }
 
   private async openFileInEditor(filePath: string): Promise<void> {
@@ -230,7 +547,7 @@ export class AgentPanelProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private getHtmlForWebview(webview: vscode.Webview): string {
+  public getHtmlForWebview(webview: vscode.Webview): string {
     const styleUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this._extensionUri, 'media', 'styles.css')
     );
@@ -254,20 +571,26 @@ export class AgentPanelProvider implements vscode.WebviewViewProvider {
       <span>ForgePilot</span>
       <span class="fp-status-badge">
         <span class="fp-status-dot" id="statusDot"></span>
-        <span id="statusText">TrueForge</span>
+        <span id="statusText">Ready</span>
       </span>
     </div>
     <div class="fp-header-actions">
-      <button class="fp-icon-btn" id="newSessionBtn" title="Start New Session">+ New</button>
+      <button class="fp-icon-btn" id="newSessionBtn" title="Start New Conversation">+ New</button>
       <button class="fp-icon-btn" id="settingsBtn" title="Settings">&#9881;</button>
     </div>
   </div>
 
   <!-- Tabs -->
   <div class="fp-tabs">
-    <button class="fp-tab active" data-tab="chat">Agent</button>
-    <button class="fp-tab" data-tab="diff">Diffs (<span id="diffCountBadge">0</span>)</button>
-    <button class="fp-tab" data-tab="context">Context</button>
+    <button class="fp-tab active" data-tab="chat">
+      Agent Chat
+    </button>
+    <button class="fp-tab" data-tab="diff">
+      Diff Review <span class="fp-badge-counter" id="diffCountBadge">0</span>
+    </button>
+    <button class="fp-tab" data-tab="context">
+      Context <span class="fp-badge-counter" id="ctxTokensBadge">0k</span>
+    </button>
   </div>
 
   <!-- Tab 1: Chat Conversation -->
@@ -276,12 +599,12 @@ export class AgentPanelProvider implements vscode.WebviewViewProvider {
       <div class="fp-message agent">
         <div class="fp-message-header">
           <span>ForgePilot Assistant</span>
-          <span>TrueForge Active</span>
+          <button class="fp-copy-btn" onclick="copyMessageText(this)">Copy Response</button>
         </div>
         <div class="fp-message-body">
           <p>Welcome to <strong>ForgePilot</strong>. I am your autonomous coding assistant powered by TrueForge.</p>
           <p style="margin-top: 6px; font-size: 11px; color: var(--text-secondary);">
-            Use <code>@file</code> or <code>@symbol</code> to attach specific code, or describe your task and I will discover files and propose safe edits.
+            Describe a task to discover files and propose multi-file changes, or use <code>Ctrl+Alt+I</code> for inline editing.
           </p>
         </div>
       </div>
@@ -296,31 +619,31 @@ export class AgentPanelProvider implements vscode.WebviewViewProvider {
             <option value="inline">Inline Edit</option>
           </select>
         </div>
-        <div class="fp-mentions-hint">Type @file or @symbol</div>
+        <div class="fp-mentions-hint">@file and @symbol supported</div>
       </div>
       <textarea
         class="fp-textarea"
         id="promptInput"
-        placeholder="Ask ForgePilot to plan, edit files, or run tests..."
+        placeholder="Ask ForgePilot to plan, edit files, or run tests... (Ctrl+Enter to send)"
       ></textarea>
       <div class="fp-actions-row">
-        <button class="fp-btn fp-btn-secondary" id="cancelBtn" style="display: none;">Cancel</button>
+        <span class="fp-keyboard-hint">Ctrl+Enter to send</span>
         <button class="fp-btn fp-btn-primary" id="sendBtn">Send</button>
       </div>
     </div>
   </div>
 
-  <!-- Tab 2: Diff Review Panel -->
+  <!-- Tab 2: Unified Diff Review Panel -->
   <div class="fp-tab-content" id="tab-diff">
     <div class="fp-diff-toolbar">
       <button class="fp-btn fp-btn-secondary" id="acceptAllBtn">Accept All</button>
       <button class="fp-btn fp-btn-secondary" id="rejectAllBtn">Reject All</button>
-      <button class="fp-btn fp-btn-success" id="applyBtn">Apply Accepted</button>
+      <button class="fp-btn fp-btn-primary" id="applyBtn">Apply Approved Changes</button>
       <button class="fp-btn fp-btn-secondary" id="undoBtn" disabled>Undo</button>
     </div>
     <div class="fp-diff-container" id="diffContainer">
-      <div style="text-align: center; color: var(--text-secondary); padding: 30px 10px;">
-        No proposed edits. Edits proposed by ForgePilot will appear here for safe review.
+      <div style="text-align: center; color: var(--text-secondary); padding: 40px 15px; font-size: 12px;">
+        No proposed edits. Changes proposed by Autonomous Agent or Inline Edit will appear here for safe review.
       </div>
     </div>
   </div>
@@ -329,17 +652,23 @@ export class AgentPanelProvider implements vscode.WebviewViewProvider {
   <div class="fp-tab-content" id="tab-context">
     <div class="fp-context-panel" id="contextPanel">
       <div class="fp-stat-card">
-        <div class="fp-stat-title">Token Budget</div>
-        <div class="fp-stat-value" id="ctxTokens">20,000 max tokens</div>
+        <div class="fp-stat-title">Token Budget Usage</div>
+        <div class="fp-stat-value">
+          <span id="ctxTokensDisplay">0 / 20,000 tokens</span>
+          <span id="ctxTokensPct" style="font-size: 12px; color: var(--text-secondary);">0%</span>
+        </div>
+        <div class="fp-progress-bar-bg">
+          <div class="fp-progress-bar-fill" id="ctxProgressFill" style="width: 0%;"></div>
+        </div>
       </div>
       <div class="fp-stat-card">
-        <div class="fp-stat-title">Model Harness</div>
-        <div style="font-size: 12px; color: var(--text-primary);" id="ctxModel">TrueForge Local / Remote</div>
+        <div class="fp-stat-title">Configured Agent Harness</div>
+        <div style="font-size: 12px; color: var(--text-primary);" id="ctxModel">TrueForge Local Engine</div>
       </div>
       <div class="fp-stat-card">
         <div class="fp-stat-title">Retrieved Context Files</div>
-        <div id="ctxFilesList" style="font-size: 11px; font-family: var(--font-code); color: var(--text-secondary); margin-top: 6px;">
-          None retrieved yet.
+        <div id="ctxFilesList" style="margin-top: 8px;">
+          <div style="font-size: 11px; color: var(--text-secondary);">No context retrieved yet. Send a prompt to trigger context retrieval.</div>
         </div>
       </div>
     </div>
@@ -355,19 +684,22 @@ export class AgentPanelProvider implements vscode.WebviewViewProvider {
     const chatHistory = document.getElementById('chatHistory');
     const promptInput = document.getElementById('promptInput');
     const sendBtn = document.getElementById('sendBtn');
-    const cancelBtn = document.getElementById('cancelBtn');
     const modeSelect = document.getElementById('modeSelect');
     const statusDot = document.getElementById('statusDot');
     const statusText = document.getElementById('statusText');
     const diffContainer = document.getElementById('diffContainer');
     const diffCountBadge = document.getElementById('diffCountBadge');
+    const ctxTokensBadge = document.getElementById('ctxTokensBadge');
+    const ctxTokensDisplay = document.getElementById('ctxTokensDisplay');
+    const ctxTokensPct = document.getElementById('ctxTokensPct');
+    const ctxProgressFill = document.getElementById('ctxProgressFill');
+    const ctxFilesList = document.getElementById('ctxFilesList');
     const acceptAllBtn = document.getElementById('acceptAllBtn');
     const rejectAllBtn = document.getElementById('rejectAllBtn');
     const applyBtn = document.getElementById('applyBtn');
     const undoBtn = document.getElementById('undoBtn');
     const newSessionBtn = document.getElementById('newSessionBtn');
     const settingsBtn = document.getElementById('settingsBtn');
-    const ctxFilesList = document.getElementById('ctxFilesList');
 
     // Tab switching
     document.querySelectorAll('.fp-tab').forEach(tab => {
@@ -379,10 +711,14 @@ export class AgentPanelProvider implements vscode.WebviewViewProvider {
       });
     });
 
-    // Send Message
-    function sendMessage() {
+    // Send Message / Stop Generation
+    function handleActionClick() {
+      if (isWorking) {
+        vscode.postMessage({ type: 'cancelTurn' });
+        return;
+      }
       const text = promptInput.value.trim();
-      if (!text || isWorking) return;
+      if (!text) return;
       promptInput.value = '';
       vscode.postMessage({
         type: 'sendMessage',
@@ -391,19 +727,16 @@ export class AgentPanelProvider implements vscode.WebviewViewProvider {
       });
     }
 
-    sendBtn.addEventListener('click', sendMessage);
+    sendBtn.addEventListener('click', handleActionClick);
     promptInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-        sendMessage();
+        handleActionClick();
       }
-    });
-
-    cancelBtn.addEventListener('click', () => {
-      vscode.postMessage({ type: 'cancelTurn' });
     });
 
     newSessionBtn.addEventListener('click', () => {
       chatHistory.innerHTML = '';
+      appendAgentMessage('Started a new TrueForge session. How can I help you today?');
       vscode.postMessage({ type: 'newSession' });
     });
 
@@ -431,36 +764,72 @@ export class AgentPanelProvider implements vscode.WebviewViewProvider {
     window.addEventListener('message', (e) => {
       const msg = e.data;
       switch (msg.type) {
+        case 'init':
+          if (msg.proposals) {
+            currentProposals = msg.proposals;
+            renderDiffs(currentProposals);
+          }
+          if (msg.canUndo !== undefined) undoBtn.disabled = !msg.canUndo;
+          if (msg.config) {
+            const mEl = document.getElementById('ctxModel');
+            if (mEl) mEl.textContent = (msg.config.primaryModel || 'gemini-2.5-pro') + ' via TrueForge (' + (msg.config.endpoint || 'local') + ')';
+          }
+          break;
+
         case 'userMessage':
           appendUserMessage(msg.text);
           break;
+
+        case 'timelineEvent':
+          appendTimelineItem(msg.event);
+          break;
+
         case 'agentDelta':
           appendAgentDelta(msg.delta);
           break;
-        case 'toolCall':
-          appendToolCard(msg.toolCall);
-          break;
+
         case 'toolResult':
-          updateToolResult(msg.toolResult);
+          updateTimelineToolResult(msg.toolResult, msg.summary);
           break;
+
         case 'agentError':
           appendErrorMessage(msg.error);
           break;
+
+        case 'agentCancelled':
+          appendWarningMessage(msg.message || 'Turn cancelled');
+          break;
+
         case 'statusChange':
           updateStatus(msg.status);
           break;
+
         case 'proposalsUpdated':
           currentProposals = msg.proposals;
           renderDiffs(currentProposals);
+          if (msg.canUndo !== undefined) undoBtn.disabled = !msg.canUndo;
           break;
+
         case 'contextRetrieved':
           renderContext(msg.context);
           break;
+
+        case 'showProposal':
+          switchToDiffsTabAndScroll(msg.proposalId);
+          break;
+
         case 'applyResult':
           if (msg.canUndo !== undefined) undoBtn.disabled = !msg.canUndo;
           break;
+
         case 'undoResult':
           if (msg.canUndo !== undefined) undoBtn.disabled = !msg.canUndo;
+          break;
+
+        case 'newSessionCreated':
+          currentProposals = [];
+          renderDiffs([]);
+          undoBtn.disabled = true;
           break;
       }
     });
@@ -470,17 +839,25 @@ export class AgentPanelProvider implements vscode.WebviewViewProvider {
     function appendUserMessage(text) {
       const msg = document.createElement('div');
       msg.className = 'fp-message user';
-      msg.innerHTML = '<div class="fp-message-header">You</div><div class="fp-message-body">' + escapeHtml(text) + '</div>';
+      msg.innerHTML = '<div class="fp-message-header"><span>You</span><span>' + formatTime() + '</span></div><div class="fp-message-body">' + escapeHtml(text).replace(/\\n/g, '<br/>') + '</div>';
       chatHistory.appendChild(msg);
       chatHistory.scrollTop = chatHistory.scrollHeight;
       activeAgentMsgBody = null;
+    }
+
+    function appendAgentMessage(text) {
+      const msg = document.createElement('div');
+      msg.className = 'fp-message agent';
+      msg.innerHTML = '<div class="fp-message-header"><span>ForgePilot Assistant</span><button class="fp-copy-btn" onclick="copyMessageText(this)">Copy Response</button></div><div class="fp-message-body"><p>' + escapeHtml(text) + '</p></div>';
+      chatHistory.appendChild(msg);
+      chatHistory.scrollTop = chatHistory.scrollHeight;
     }
 
     function appendAgentDelta(delta) {
       if (!activeAgentMsgBody) {
         const msg = document.createElement('div');
         msg.className = 'fp-message agent';
-        msg.innerHTML = '<div class="fp-message-header"><span>ForgePilot</span><span>Streaming</span></div><div class="fp-message-body"></div>';
+        msg.innerHTML = '<div class="fp-message-header"><span>ForgePilot Assistant</span><button class="fp-copy-btn" onclick="copyMessageText(this)">Copy Response</button></div><div class="fp-message-body"></div>';
         chatHistory.appendChild(msg);
         activeAgentMsgBody = msg.querySelector('.fp-message-body');
       }
@@ -488,30 +865,41 @@ export class AgentPanelProvider implements vscode.WebviewViewProvider {
       chatHistory.scrollTop = chatHistory.scrollHeight;
     }
 
-    function appendToolCard(toolCall) {
-      const card = document.createElement('div');
-      card.className = 'fp-tool-card';
-      card.id = 'tool-' + toolCall.callId;
-      card.innerHTML = \`
-        <div class="fp-tool-header">
-          <span>&gt; MCP Tool: \${escapeHtml(toolCall.tool)}</span>
-          <span style="color: var(--color-warning);">Running...</span>
+    function appendTimelineItem(evt) {
+      const item = document.createElement('div');
+      item.className = 'fp-timeline-item';
+      item.id = 'timeline-' + evt.id;
+
+      let iconClass = 'tool';
+      if (evt.eventType === 'context_retrieval') iconClass = 'context';
+      else if (evt.eventType === 'diff_proposal') iconClass = 'proposal';
+      else if (evt.eventType === 'error') iconClass = 'error';
+
+      item.innerHTML = \`
+        <div class="fp-timeline-header">
+          <span class="fp-timeline-icon \${iconClass}">
+            <span>&gt;</span>
+            <span>\${escapeHtml(evt.title)}</span>
+          </span>
+          <span class="fp-timeline-status \${evt.status}">\${evt.status}</span>
         </div>
-        <div class="fp-tool-body">
-          <pre>\${escapeHtml(JSON.stringify(toolCall.input, null, 2))}</pre>
-        </div>
+        <div class="fp-timeline-body">\${escapeHtml(evt.detail)}</div>
       \`;
-      chatHistory.appendChild(card);
+      chatHistory.appendChild(item);
       chatHistory.scrollTop = chatHistory.scrollHeight;
     }
 
-    function updateToolResult(toolResult) {
-      const card = document.getElementById('tool-' + toolResult.callId);
-      if (card) {
-        const header = card.querySelector('.fp-tool-header span:last-child');
-        if (header) {
-          header.textContent = 'Completed';
-          header.style.color = 'var(--color-success)';
+    function updateTimelineToolResult(toolResult, summary) {
+      const item = document.getElementById('timeline-call-' + toolResult.callId);
+      if (item) {
+        const badge = item.querySelector('.fp-timeline-status');
+        if (badge) {
+          badge.className = 'fp-timeline-status completed';
+          badge.textContent = 'completed';
+        }
+        const body = item.querySelector('.fp-timeline-body');
+        if (body && summary) {
+          body.textContent += '\\n\\nResult: ' + summary;
         }
       }
     }
@@ -520,7 +908,16 @@ export class AgentPanelProvider implements vscode.WebviewViewProvider {
       const msg = document.createElement('div');
       msg.className = 'fp-message agent';
       msg.style.borderColor = 'var(--color-error)';
-      msg.innerHTML = '<div class="fp-message-header" style="color: var(--color-error);">Error</div><div class="fp-message-body">' + escapeHtml(err) + '</div>';
+      msg.innerHTML = '<div class="fp-message-header" style="color: var(--color-error);"><span>Error</span><span>' + formatTime() + '</span></div><div class="fp-message-body" style="color: #FFB0B0;">' + escapeHtml(err) + '</div>';
+      chatHistory.appendChild(msg);
+      chatHistory.scrollTop = chatHistory.scrollHeight;
+    }
+
+    function appendWarningMessage(warn) {
+      const msg = document.createElement('div');
+      msg.className = 'fp-message agent';
+      msg.style.borderColor = 'var(--color-warning)';
+      msg.innerHTML = '<div class="fp-message-header" style="color: var(--color-warning);"><span>Notice</span><span>' + formatTime() + '</span></div><div class="fp-message-body" style="color: var(--color-warning);">' + escapeHtml(warn) + '</div>';
       chatHistory.appendChild(msg);
       chatHistory.scrollTop = chatHistory.scrollHeight;
     }
@@ -530,13 +927,13 @@ export class AgentPanelProvider implements vscode.WebviewViewProvider {
       if (isWorking) {
         statusDot.className = 'fp-status-dot busy';
         statusText.textContent = 'Executing...';
-        sendBtn.style.display = 'none';
-        cancelBtn.style.display = 'inline-block';
+        sendBtn.className = 'fp-btn fp-btn-danger';
+        sendBtn.textContent = '■ Stop';
       } else {
         statusDot.className = 'fp-status-dot';
-        statusText.textContent = 'TrueForge';
-        sendBtn.style.display = 'inline-block';
-        cancelBtn.style.display = 'none';
+        statusText.textContent = 'Ready';
+        sendBtn.className = 'fp-btn fp-btn-primary';
+        sendBtn.textContent = 'Send';
         activeAgentMsgBody = null;
       }
     }
@@ -544,37 +941,57 @@ export class AgentPanelProvider implements vscode.WebviewViewProvider {
     function renderDiffs(proposals) {
       diffCountBadge.textContent = proposals.length;
       if (proposals.length === 0) {
-        diffContainer.innerHTML = '<div style="text-align: center; color: var(--text-secondary); padding: 30px 10px;">No proposed edits pending review.</div>';
+        diffContainer.innerHTML = '<div style="text-align: center; color: var(--text-secondary); padding: 40px 15px; font-size: 12px;">No proposed edits pending review. Changes proposed by Autonomous Agent or Inline Edit will appear here.</div>';
+        applyBtn.disabled = true;
         return;
       }
 
+      applyBtn.disabled = false;
       diffContainer.innerHTML = '';
+
       proposals.forEach(p => {
         const card = document.createElement('div');
         card.className = 'fp-diff-card';
+        card.id = 'proposal-' + p.id;
+
+        const staleBannerHtml = p.isStale
+          ? '<div class="fp-stale-banner">⚠️ ' + escapeHtml(p.staleReason || 'File modified on disk since proposal creation.') + '</div>'
+          : '';
+
         card.innerHTML = \`
           <div class="fp-diff-header">
-            <span>\${escapeHtml(p.filePath)} (\${p.status})</span>
+            <div class="fp-diff-file-title" onclick="openFile('\${escapeHtml(p.filePath)}')">
+              <span>📄 \${escapeHtml(p.filePath)}</span>
+              <span class="fp-diff-mode-badge">\${escapeHtml(p.mode)}</span>
+              <span class="fp-diff-stats">
+                <span class="fp-stat-add">+\${p.addedLines}</span>
+                <span class="fp-stat-del">-\${p.deletedLines}</span>
+              </span>
+            </div>
             <div class="fp-diff-actions">
               <button class="fp-icon-btn" onclick="acceptAllProposal('\${p.id}')">Accept All</button>
               <button class="fp-icon-btn" onclick="rejectAllProposal('\${p.id}')">Reject All</button>
             </div>
           </div>
+          \${staleBannerHtml}
         \`;
 
-        p.hunks.forEach(h => {
+        p.hunks.forEach((h, idx) => {
           const hunkDiv = document.createElement('div');
           hunkDiv.className = 'fp-hunk';
+
           const linesHtml = h.lines.map(l => {
-            const cls = l.startsWith('+') ? 'fp-line-add' : l.startsWith('-') ? 'fp-line-del' : '';
+            const cls = l.startsWith('+') ? 'fp-line fp-line-add' : l.startsWith('-') ? 'fp-line fp-line-del' : 'fp-line fp-line-ctx';
             return \`<div class="\${cls}">\${escapeHtml(l)}</div>\`;
           }).join('');
 
+          const statusColor = h.status === 'accepted' ? 'var(--color-success)' : h.status === 'rejected' ? 'var(--color-error)' : 'var(--text-secondary)';
+
           hunkDiv.innerHTML = \`
             <div class="fp-hunk-meta">
-              <span>Lines -\${h.oldStart},\${h.oldLines} +\${h.newStart},\${h.newLines}</span>
-              <div>
-                <span style="margin-right: 8px; color: \${h.status === 'accepted' ? 'var(--color-success)' : h.status === 'rejected' ? 'var(--color-error)' : 'var(--text-secondary)'}">
+              <span>Hunk #\${idx + 1}: Lines -\${h.oldStart},\${h.oldLines} +\${h.newStart},\${h.newLines}</span>
+              <div style="display: flex; align-items: center; gap: 6px;">
+                <span style="color: \${statusColor}; font-weight: 600; text-transform: uppercase; font-size: 10px;">
                   [\${h.status}]
                 </span>
                 <button class="fp-icon-btn" onclick="acceptHunk('\${p.id}', '\${h.id}')">&#10003; Accept</button>
@@ -606,15 +1023,78 @@ export class AgentPanelProvider implements vscode.WebviewViewProvider {
       vscode.postMessage({ type: 'rejectAll', proposalId });
     }
 
+    function openFile(filePath) {
+      vscode.postMessage({ type: 'openFile', filePath });
+    }
+
+    function switchToDiffsTabAndScroll(proposalId) {
+      document.querySelectorAll('.fp-tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.fp-tab-content').forEach(c => c.classList.remove('active'));
+      const diffTab = document.querySelector('.fp-tab[data-tab="diff"]');
+      if (diffTab) diffTab.classList.add('active');
+      const diffContent = document.getElementById('tab-diff');
+      if (diffContent) diffContent.classList.add('active');
+
+      setTimeout(() => {
+        const card = document.getElementById('proposal-' + proposalId);
+        if (card) {
+          card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          card.style.borderColor = 'var(--primary-accent)';
+          card.style.boxShadow = '0 0 12px rgba(62, 214, 196, 0.4)';
+          setTimeout(() => {
+            card.style.borderColor = '';
+            card.style.boxShadow = '';
+          }, 2500);
+        }
+      }, 100);
+    }
+
     function renderContext(ctx) {
+      const budget = ctx.tokenBudget || 20000;
+      const tokens = ctx.totalTokens || 0;
+      const pct = ctx.percentage || Math.min(100, Math.round((tokens / budget) * 100));
+
+      ctxTokensBadge.textContent = Math.round(tokens / 1000) + 'k';
+      ctxTokensDisplay.textContent = tokens.toLocaleString() + ' / ' + budget.toLocaleString() + ' tokens';
+      ctxTokensPct.textContent = pct + '%';
+      ctxProgressFill.style.width = pct + '%';
+      if (pct > 90) ctxProgressFill.style.backgroundColor = 'var(--color-error)';
+      else if (pct > 75) ctxProgressFill.style.backgroundColor = 'var(--color-warning)';
+      else ctxProgressFill.style.backgroundColor = 'var(--primary-accent)';
+
       if (ctx.explanation && ctx.explanation.length > 0) {
         ctxFilesList.innerHTML = ctx.explanation.map(e => \`
-          <div style="margin-bottom: 6px;">
-            <div style="color: var(--primary-blue);">\${escapeHtml(e.filePath)} (score: \${e.score})</div>
-            <div style="font-size: 10px; color: var(--text-secondary);">\${escapeHtml(e.reason)}</div>
+          <div class="fp-context-file-item" onclick="openFile('\${escapeHtml(e.filePath)}')">
+            <div class="fp-ctx-file-header">
+              <span>📄 \${escapeHtml(e.filePath)}</span>
+              <span>Score: \${e.score}</span>
+            </div>
+            <div class="fp-ctx-file-reason">\${escapeHtml(e.reason)}</div>
           </div>
         \`).join('');
+      } else {
+        ctxFilesList.innerHTML = '<div style="font-size: 11px; color: var(--text-secondary);">No context files retrieved.</div>';
       }
+    }
+
+    function copyMessageText(btn) {
+      const msgBody = btn.closest('.fp-message').querySelector('.fp-message-body');
+      if (!msgBody) return;
+      const text = msgBody.innerText || msgBody.textContent;
+      navigator.clipboard.writeText(text).then(() => {
+        const orig = btn.textContent;
+        btn.textContent = '✓ Copied!';
+        btn.style.color = 'var(--color-success)';
+        setTimeout(() => {
+          btn.textContent = orig;
+          btn.style.color = '';
+        }, 2000);
+      });
+    }
+
+    function formatTime() {
+      const d = new Date();
+      return d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
     }
 
     function escapeHtml(str) {
@@ -631,4 +1111,3 @@ export class AgentPanelProvider implements vscode.WebviewViewProvider {
 </html>`;
   }
 }
-

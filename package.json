@@ -109,12 +109,14 @@
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
+    "postinstall": "node -e \"const fs = require('fs'); const p = 'node_modules/@truefoundry/trueforge-sdk/dist/cjs/package.json'; if (fs.existsSync('node_modules/@truefoundry/trueforge-sdk/dist/cjs') && !fs.existsSync(p)) fs.writeFileSync(p, JSON.stringify({ type: 'commonjs' }));\"",
     "watch": "tsc -watch -p ./",
     "lint": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.6.1",
+    "@truefoundry/trueforge-sdk": "^0.185.0",
     "diff": "^7.0.0"
   },
   "devDependencies": {
