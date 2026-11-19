@@ -62,35 +62,42 @@ To maximize model reasoning quality while strictly staying within the token budg
 ---
 
 ## 5. Model Setup
-All model execution is managed through TrueForge configuration:
 
-- **TrueForge Registered Agent**: `forgepilot-agent` (ID: `01m7qzsxw4g7a5zywb80eryje9` in local TrueForge database `db.sqlite`).
-- **Server Assigned Model**: `openai/chat-latest` configured under provider `openai` (`https://api.openai.com/v1`).
-- **Extension Configuration Defaults**: `gemini-2.5-pro` (primary) and `gemini-2.5-flash` (fallback) defined in `package.json` and `agents/forgepilot-agent.yaml`.
-- **Live Provider Status**: The local TrueForge server's configured OpenAI provider returned HTTP 429 (`insufficient_quota`). No Google/Gemini provider is currently registered in the local TrueForge SQLite store (`model_provider` table).
-- **Fallback Verification**: Fallback model switching is verified in automated unit/integration test suites (`test/trueforge.test.ts`), but live failover cannot occur until a second working provider is registered in TrueForge.
+All model execution is managed through TrueForge configuration, strictly decoupled from the extension client:
+
+- **Extension Configuration Defaults**: In `package.json` and `agents/forgepilot-agent.yaml`, `forgepilot.primaryModel` (`gemini-2.5-pro`) and `forgepilot.fallbackModel` (`gemini-2.5-flash`) specify client-side preference metadata.
+- **Actual TrueForge Server Database Configuration**: The local TrueForge server's internal database (`%LOCALAPPDATA%\trueforge\Data\db\db.sqlite`) has a single configured provider record of type `openai` (`base_url: https://api.openai.com/v1`). No Google or Gemini provider is registered in TrueForge's internal `model_provider` table.
+- **Registered Agent & Model**: The registered agent `forgepilot-agent` (`id: 01m7qzsxw4g7a5zywb80eryje9`) is assigned model `openai/chat-latest`.
+- **Live Provider Status**: Live model inference attempts against the server resulted in HTTP 429 (`insufficient_quota`) from the configured OpenAI account.
+- **Fallback Verification Status**: Client-side resilience and fallback switching logic are **AUTOMATED TEST VERIFIED** in Vitest (`test/trueforge.test.ts`), confirming the extension client detects quota exhaustion and attempts failover without crashing. However, live failover between two live providers on the server is **NOT VERIFIED LIVE** because no second funded provider exists in the inspected TrueForge database.
 - **Client Discipline**: ForgePilot contains zero direct model API calls; all inference requests route exclusively through TrueForge's `client.sessions.createTurnStream`.
 
 ---
 
 ## 6. Scorecard: Five Mandatory Capabilities
 
+Evidence categories enforced across all evaluations:
+- **`LIVE VERIFIED`**: Validated against running TrueForge daemon with database proof.
+- **`AUTOMATED TEST VERIFIED`**: Validated through mock-streamed SDK integration tests.
+- **`DETERMINISTIC VERIFIED`**: Validated through Python process and file inspection on Flask 3.1.3 benchmark.
+- **`NOT VERIFIED LIVE`**: Blocked by upstream provider quota exhaustion.
+
 | # | Mandatory Capability | Target Specification | Actual Measured Result | Status |
 |---|---|---|---|:---:|
-| 1 | **Inline Editing** | `forgepilot.inlineEdit` command (`Ctrl+Alt+I`), multiline selection, language & line context, stale document detection, per-hunk review, undo | Verified in unit, component, and Flask integration tests. Handles single-line, multiline, empty selection auto-expansion, stale document rejection, and undo. | **PASS** |
-| 2 | **Autonomous Multi-File Agent Mode** | High-level request without filenames, autonomous discovery of 3+ files, multi-step MCP tool calls, turn continuation, proposed changes across files | Discovers `src/flask/cli.py`, `tests/test_cli.py`, and `docs/cli.rst` for Task B. Sequences tool calls, collects results, and registers diff proposals without modifying disk. | **PASS** |
-| 3 | **Context Assembly** | Parse `@file`, `@symbol`, automated lexical & symbol retrieval, ranking engine, token budget enforcement | Extracts explicit mentions, indexes symbols/commands, ranks candidates, and respects 20,000 token budget with compaction. | **PASS** |
-| 4 | **Diff Review** | Per-hunk accept/reject, Accept All, Reject All, Apply Approved Changes, stale file warnings, full Undo | Unified webview review container shared between Autonomous and Inline modes. Hunks render line-by-line (`+` green, `-` red), prevents stale apply, and supports one-click rollback. | **PASS** |
-| 5 | **Streaming and Cancellation** | Real-time `text_delta` streaming, timeline events, responsive UI, server-side cancellation via `client.sessions.cancel` | Real-time streaming in chat and progress notifications. Cancel button and `AbortSignal` trigger server-side cancellation immediately. | **PASS** |
+| 1 | **Inline Editing** | `forgepilot.inlineEdit` command (`Ctrl+Alt+I`), multiline selection, language & line context, stale document detection, per-hunk review, undo | Verified in unit and component tests (`test/inlineEdit.test.ts`). Handles multiline selection, empty selection auto-expansion, stale document rejection, and byte-for-byte undo. | **AUTOMATED TEST VERIFIED** |
+| 2 | **Autonomous Multi-File Agent Mode** | High-level request without filenames, autonomous discovery of 3+ files, multi-step MCP tool calls, turn continuation, proposed changes across files | Discovers `src/flask/cli.py`, `tests/test_cli.py`, and `docs/cli.rst` for Task B. Sequences tool calls and registers diff proposals without modifying disk. | **AUTOMATED TEST VERIFIED (Discovery & Diffs)**<br>**NOT VERIFIED LIVE (Model Inference)** |
+| 3 | **Context Assembly** | Parse `@file`, `@symbol`, automated lexical & symbol retrieval, ranking engine, token budget enforcement | Extracts explicit mentions, indexes symbols/commands, ranks candidates, and respects 20,000 token budget with compaction (`test/contextEngine.test.ts`). | **AUTOMATED TEST VERIFIED** |
+| 4 | **Diff Review** | Per-hunk accept/reject, Accept All, Reject All, Apply Approved Changes, stale file warnings, full Undo | Unified webview review container shared between Autonomous and Inline modes. Hunks render line-by-line (`+` green, `-` red), prevents stale apply, and supports one-click rollback (`test/diffManager.test.ts`). | **AUTOMATED TEST VERIFIED** |
+| 5 | **Streaming and Cancellation** | Real-time `text_delta` streaming, timeline events, responsive UI, server-side cancellation via `client.sessions.cancel` | Session creation and server-side cancellation confirmed in TrueForge `db.sqlite` (`status: cancelled, reason: client-cancelled`). Event streaming verified via SDK turn streams. | **LIVE VERIFIED (Session & Cancellation)**<br>**AUTOMATED TEST VERIFIED (Event Stream)** |
 
 ### Acceptance Tasks Scorecard
 
 | Acceptance Task | Procedure & Command | Expected Output | Actual Output | Status |
 |---|---|---|---|:---:|
-| **Task A (Inline Edit)** | `FLASK_DEBUG=off python -c "from flask.helpers import get_debug_flag; print(get_debug_flag())"` | `False` | `False` (also verified `'n'`, `'OFF'`, `'N'` -> `False`; `'1'`, `'true'` -> `True`) | **PASS** (Deterministic Verification) |
-| **Task B (Autonomous Multi-File)** | `pytest tests/test_cli.py -k test_config_command -q` | `1 passed` | `1 passed, 58 deselected in 0.37s` | **PASS** (Deterministic Verification) |
-| **Task B (CLI Help)** | `flask --help` | Includes `config` with help text | `config  Show loaded configuration as JSON.` present in `flask --help` | **PASS** (Deterministic Verification) |
-| **Task C (Resilience)** | Unreachable endpoint / invalid key configuration | Readable error, no crash, 0 files modified | Error surfaced gracefully in timeline/chat; `git status --short` remains 100% empty | **PASS** |
+| **Task A (Inline Edit)** | `FLASK_DEBUG=off python -c "from flask.helpers import get_debug_flag; print(get_debug_flag())"` | `False` | `False` (also verified `'n'`, `'OFF'`, `'N'` -> `False`; `'1'`, `'true'` -> `True`) | **DETERMINISTIC VERIFIED** |
+| **Task B (Autonomous Multi-File)** | `pytest tests/test_cli.py -k test_config_command -q` | `1 passed` | `1 passed, 58 deselected in 0.37s` | **DETERMINISTIC VERIFIED (Discovery & Pytest)**<br>**NOT VERIFIED LIVE (Model Inference)** |
+| **Task B (CLI Help)** | `flask --help` | Includes `config` with help text | `config  Show loaded configuration as JSON.` present in `flask --help` | **DETERMINISTIC VERIFIED** |
+| **Task C (Resilience)** | Unreachable endpoint / invalid key configuration | Readable error, no crash, 0 files modified | Error surfaced gracefully in timeline/chat; `git status --short flask` remains 100% empty | **AUTOMATED TEST VERIFIED** |
 
 ---
 
@@ -121,49 +128,64 @@ All model execution is managed through TrueForge configuration:
 
 ## 9. Four-Minute Demonstration Script
 
-### Act 1: Introduction & Connection (0:00 – 0:45)
-- Open VS Code with the ForgePilot extension and the official Flask 3.1.3 repository.
-- Click the **ForgePilot** icon in the Activity Bar. Show the branded header, status indicator ("Ready"), and the three primary tabs: **Agent Chat**, **Diff Review (0)**, and **Context (0k)**.
-- Highlight the architecture: ForgePilot is powered by the official `@truefoundry/trueforge-sdk` (v0.185.0). Zero direct LLM or OpenAI API calls exist inside the extension.
+To ensure strict adherence to honesty, two demonstration paths are defined:
 
-### Act 2: Task A — Inline Edit (`Ctrl+Alt+I`) (0:45 – 1:45)
-- Open `src/flask/helpers.py` and navigate to `get_debug_flag`.
-- Highlight lines 20–35. Press `Ctrl+Alt+I`.
-- In the compact input box, enter:
-  *"Treat the values 'off' and 'n' as false as well, case-insensitively, and update the docstring to list every value that is treated as false."*
-- Show real-time streaming progress in the notification.
-- Click **Review in ForgePilot**. The webview smoothly focuses and switches to the **Diff Review** tab, highlighting the proposal card.
-- Show the hunk diff viewer: green additions (`+ "off", "n"`), red deletions.
-- Click **Apply Approved Changes**. Demonstrate the terminal verification:
-  ```bash
-  FLASK_DEBUG=off python -c "from flask.helpers import get_debug_flag; print(get_debug_flag())"
-  # Output: False
-  ```
-- Click **Undo** to demonstrate zero-risk rollback.
+---
 
-### Act 3: Task B — Autonomous Agent Mode (1:45 – 3:00)
-- Switch to the **Agent Chat** tab.
-- Submit the high-level prompt without mentioning any filenames:
-  *"Add a new built-in CLI command flask config that prints the loaded application's configuration as JSON, masking the values of any key containing SECRET, PASSWORD, TOKEN or KEY as '***'. It must appear in flask --help, be covered by a test, and be documented alongside the other built-in commands."*
-- Watch the **Live Execution Timeline**:
-  1. *Context Retrieval*: Assembles relevant files within the 20,000 token budget.
-  2. *MCP Tool Execution*: Calls `search_workspace` and `read_file` with masked sensitive parameters.
-  3. *Diff Proposals Created*: Proposes synchronized edits across 3 files: `src/flask/cli.py`, `tests/test_cli.py`, and `docs/cli.rst`.
-- Switch to the **Context Explorer** tab to inspect file relevance scores and selection reasons.
-- Switch to the **Diff Review** tab. Show all 3 file cards. Click **Accept All** and **Apply Approved Changes**.
-- Run verification commands in terminal:
-  ```bash
-  flask --help
-  pytest tests/test_cli.py -k test_config_command -q
-  # Output: 1 passed
-  ```
+### PATH A: When an Active, Funded TrueForge Provider Is Configured
+*(Use when TrueForge is started with valid OpenAI or Gemini API credits).*
 
-### Act 4: Task C — Resilience & Wrap-Up (3:00 – 4:00)
-- Demonstrate workspace protection: Point ForgePilot to an invalid or unreachable endpoint.
-- Submit a prompt. Show the clean timeline error card.
-- Run `git status --short` in terminal to prove **zero files were corrupted or partially written**.
-- Highlight test suite results: 58/58 tests passing in Vitest.
-- Conclude: ForgePilot satisfies all five competition capabilities using TrueForge as the sole agent runtime.
+- **Act 1: System Overview & Architecture (0:00 – 0:40)**:
+  - Tour sidebar webview, Activity Bar icon, connection status badge ("Ready").
+  - Emphasize TrueForge TypeScript SDK v0.185.0: zero direct model API calls inside VS Code.
+- **Act 2: Live Task A — Selection & Inline Diff (0:40 – 1:30)**:
+  - Highlight `get_debug_flag` in `src/flask/helpers.py`. Press `Ctrl+Alt+I`.
+  - Enter prompt: *"Treat the values 'off' and 'n' as false as well, case-insensitively, and update the docstring to list every value that is treated as false."*
+  - **No video cuts**: Watch live token stream in notification, review proposed hunk in Diff Review tab, click **Apply Approved Changes**.
+  - Run `FLASK_DEBUG=off python -c "from flask.helpers import get_debug_flag; print(get_debug_flag())"` $\rightarrow$ `False`.
+  - Click **Undo** to restore original state.
+- **Act 3: Live Task B — Autonomous Discovery & Changes (1:30 – 2:50)**:
+  - Submit high-level prompt in Agent Chat without naming files.
+  - Watch TrueForge drive the loop: context retrieval, MCP tool execution (`search_workspace`, `read_file`), proposed changes across `src/flask/cli.py`, `tests/test_cli.py`, and `docs/cli.rst`.
+  - Review all 3 file proposals in Diff Review tab. Click **Accept All** and **Apply**.
+  - Run `pytest tests/test_cli.py -k test_config_command -q` (1 passed) and `flask --help`.
+- **Act 4: Task C & Cancellation (2:50 – 3:45)**:
+  - Trigger a long prompt and immediately click **Cancel**. Show server-side cancellation.
+  - Verify workspace cleanliness with `git status --short`. Show 58/58 passing Vitest tests.
+
+---
+
+### PATH B: Offline Baseline / Provider Quota Exhaustion
+*(Use when the evaluator's local server has uncredited API keys or upstream HTTP 429).*
+
+- **Act 1: Architecture & Live Capabilities (0:00 – 0:50)**:
+  - Tour sidebar interface, registered tools, and TrueForge SDK integration.
+  - **Show live server connection and session creation**: Show active session created on `http://localhost:8790`.
+  - **Demonstrate verified live server cancellation**: Trigger a turn and cancel it; show the server logs and database recording `client-cancelled`.
+  - **Transparently disclose**: The configured OpenAI model provider returned HTTP 429 (`insufficient_quota`). No Google provider is registered in TrueForge's internal SQLite database.
+- **Act 2: Task A Inline Edit & Diff Mechanics (0:50 – 1:50)**:
+  - Show the selection capture on `get_debug_flag` in `src/flask/helpers.py` via `Ctrl+Alt+I`.
+  - Show the Diff Review interface, hunk rendering (`+` green, `-` red), and stale-file conflict safety.
+  - Run the deterministic Python acceptance command against an isolated working copy:
+    ```bash
+    FLASK_DEBUG=off python -c "from flask.helpers import get_debug_flag; print(get_debug_flag())"
+    # Output: False (also test 'n', 'OFF', 'N' -> False; '1', 'true' -> True)
+    ```
+  - Demonstrate one-click transactional Undo restoring the exact original SHA-256 hash.
+- **Act 3: Task B Autonomous Multi-File Verification (1:50 – 2:50)**:
+  - Demonstrate the autonomous context retrieval engine: scores and discovers `src/flask/cli.py`, `tests/test_cli.py`, and `docs/cli.rst` without user hardcoding filenames.
+  - Execute the verified CLI and pytest suite on the applied changes:
+    ```bash
+    pytest tests/test_cli.py -k test_config_command -q
+    # Output: 1 passed
+    flask --help
+    # Output includes: config   Show loaded configuration as JSON.
+    ```
+  - State clearly: File discovery and diff mechanics are verified; live LLM tool selection requires funded server credits.
+- **Act 4: Automated Test Suite & Workspace Protection (2:50 – 3:45)**:
+  - Run the full Vitest suite in terminal: `npm test` $\rightarrow$ **58 passed (58 total across 8 test suites)**.
+  - Show `git status --short flask`: primary Flask benchmark repository is 100% clean and pristine at commit `22d92470`.
+  - Conclude with architecture readiness for live competition evaluation once an active provider is registered.
 
 ---
 
@@ -175,6 +197,4 @@ All model execution is managed through TrueForge configuration:
 - [ ] **Screenshot 4: Context Explorer**: Tab showing token progress bar (`14,250 / 20,000 tokens`), model info, and file relevance table.
 - [ ] **Screenshot 5: Live Timeline in Chat**: Chat history displaying MCP tool call cards (`search_workspace`, `read_file`, `propose_edit`).
 - [ ] **Screenshot 6: Test Suite Passing**: Terminal output showing 58 passing Vitest tests across 8 suites.
-- [ ] **Video Clip 1 (45s)**: Task A — Selection, inline prompt, diff review, apply, and `python -c` acceptance output.
-- [ ] **Video Clip 2 (90s)**: Task B — Prompt submission, autonomous file discovery, timeline streaming, 3-file diff review, and `pytest` execution.
-- [ ] **Video Clip 3 (45s)**: Task C — Fault injection, graceful error handling, and clean `git status` verification.
+- [ ] **Video Demonstration (Max 4 minutes)**: Recorded following either Path A (Funded Provider) or Path B (Verified Baseline with Honest Disclosure). Must not cut between prompt and diff appearance in live mode.

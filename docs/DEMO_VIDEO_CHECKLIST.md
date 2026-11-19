@@ -1,91 +1,114 @@
 # ForgePilot — Demo Video Recording Checklist
 
 > **Format**: Video demonstration (Maximum 4 minutes)  
-> **Rule**: Do not cut between giving an instruction and the resulting diff appearing.
+> **Rule**: Do not cut between giving an instruction and the resulting diff appearing when recording in live mode.
 
 ---
 
 ## Pre-Recording Checklist
 - [ ] VS Code open on `pallets/flask` repository at commit `22d92470` (`git checkout 3.1.3`).
-- [ ] Git status clean (`git status --short` returns nothing).
-- [ ] TrueForge running locally on `http://localhost:8790`.
-- [ ] ForgePilot extension loaded and visible in sidebar.
-- [ ] Screen recording resolution set to 1080p (1920x1080) with clear audio.
+- [ ] Primary `flask/` repository clean (`git status --short flask` returns nothing).
+- [ ] TrueForge running locally on `http://localhost:8790` (`npx @truefoundry/trueforge@latest`).
+- [ ] ForgePilot extension loaded and visible in sidebar activity bar.
+- [ ] Screen recording resolution set to 1080p (1920x1080) with clear audio narration.
 
 ---
 
-## Video Timeline & Script (Total: 3 min 45 sec)
+## Demonstration Path Selection
 
-### 0:00 - 0:25: Introduction & Core Philosophy
-- Show the ForgePilot activity bar icon and open the dark-themed sidebar.
-- State: *"ForgePilot is an autonomous AI coding assistant for VS Code built entirely on TrueForge. Core philosophy: 'Your repository. Your context. Your control.' Zero direct model calls from the extension—everything executes through TrueForge."*
+Select the appropriate recording path based on the local TrueForge server's provider configuration:
 
----
-
-### 0:25 - 1:25: Task A — Inline Edit (helpers.py get_debug_flag)
-- **Action**:
-  1. Open `src/flask/helpers.py`.
-  2. Highlight the `get_debug_flag` function.
-  3. Press `Ctrl+Alt+I` (or `Cmd+Alt+I`) to open the ForgePilot Inline Edit input.
-  4. Paste exact instruction:
-     > *"Treat the values 'off' and 'n' as false as well, case-insensitively, and update the docstring to list every value that is treated as false."*
-  5. **DO NOT CUT**: Let the progress notification stream the TrueForge response.
-  6. Point out the Diff Review card showing the hunk:
-     - Lines removed: `-val and val.lower() not in {"0", "false", "no"}`
-     - Lines added: `+val and val.lower() not in {"0", "false", "no", "off", "n"}`
-     - Docstring additions.
-  7. Click **Accept Hunk** and **Apply Accepted**.
-  8. Run verification in the integrated terminal:
-     ```bash
-     FLASK_DEBUG=off python -c "from flask.helpers import get_debug_flag; print(get_debug_flag())"
-     # Verify output: False
-     FLASK_DEBUG=n python -c "from flask.helpers import get_debug_flag; print(get_debug_flag())"
-     # Verify output: False
-     FLASK_DEBUG=OFF python -c "from flask.helpers import get_debug_flag; print(get_debug_flag())"
-     # Verify output: False
-     ```
+- **PATH A**: Follow if an active model provider with funded credits (e.g. funded OpenAI or Gemini key) is registered in TrueForge's dashboard (`http://localhost:8790`).
+- **PATH B**: Follow if upstream provider credits are unavailable (e.g. OpenAI HTTP 429 quota exhaustion). Demonstrates verified live server capabilities and deterministic benchmarks with honest disclosures.
 
 ---
 
-### 1:25 - 2:50: Task B — Autonomous Multi-File Agent (flask config CLI)
-- **Action**:
-  1. Click **+ New** in ForgePilot header to start a clean session.
-  2. Paste exact autonomous prompt in chat:
-     > *"Add a new built-in CLI command flask config that prints the loaded application's configuration as JSON, masking the values of any key containing SECRET, PASSWORD, TOKEN or KEY as '***'. It must appear in flask --help, be covered by a test, and be documented alongside the other built-in commands."*
-  3. Point out: *Notice we do NOT name any files in the prompt!*
-  4. Show TrueForge streaming:
-     - Live context retrieval cards.
-     - MCP tool execution cards: `search_workspace`, `list_files`, `get_symbols`.
-     - The agent discovers `src/flask/cli.py`, `tests/test_cli.py`, and `docs/cli.rst`.
-  5. Show the Diff Review panel displaying proposed diffs across all 3 files.
-  6. Click **Accept All** and **Apply Accepted**.
-  7. Point out approval gate: terminal test execution request prompted to developer.
-  8. Verify in integrated terminal:
-     ```bash
-     pytest tests/test_cli.py -k test_config_command -q
-     # Output: 1 passed
-     flask --help
-     # Show config command listed in help output
-     ```
+## PATH A: When an Active, Funded TrueForge Provider Is Configured
+
+### 0:00 - 0:40: Introduction & Core Architecture
+- Open the ForgePilot activity bar panel.
+- Point out the status indicator ("Ready"), the three tabs (**Agent Chat**, **Diff Review**, **Context Explorer**), and token meter.
+- State: *"ForgePilot is an autonomous AI coding assistant for VS Code powered strictly by the official TrueForge TypeScript SDK v0.185.0. No direct LLM or OpenAI API calls exist inside the extension."*
+
+### 0:40 - 1:30: Task A — Live Inline Edit (`src/flask/helpers.py`)
+1. Open `src/flask/helpers.py` and highlight `get_debug_flag`.
+2. Press `Ctrl+Alt+I` (or `Cmd+Alt+I`).
+3. Enter exact prompt:
+   > *"Treat the values 'off' and 'n' as false as well, case-insensitively, and update the docstring to list every value that is treated as false."*
+4. **DO NOT CUT**: Let the progress notification stream the TrueForge response.
+5. Review the proposed diff in the **Diff Review** tab (showing `-` deletion and `+` addition).
+6. Click **Apply Approved Changes**.
+7. Execute acceptance verification in terminal:
+   ```bash
+   FLASK_DEBUG=off python -c "from flask.helpers import get_debug_flag; print(get_debug_flag())"
+   # Verify output: False
+   ```
+8. Click **Undo** to demonstrate transactional rollback.
+
+### 1:30 - 2:50: Task B — Live Autonomous Multi-File Agent
+1. Open the **Agent Chat** tab.
+2. Submit high-level prompt without mentioning any filenames:
+   > *"Add a new built-in CLI command flask config that prints the loaded application's configuration as JSON, masking the values of any key containing SECRET, PASSWORD, TOKEN or KEY as '***'. It must appear in flask --help, be covered by a test, and be documented alongside the other built-in commands."*
+3. Watch the **Live Execution Timeline**:
+   - Shows context retrieval card.
+   - Shows MCP tool calls (`search_workspace`, `read_file`, `propose_edit`).
+   - The agent discovers `src/flask/cli.py`, `tests/test_cli.py`, and `docs/cli.rst`.
+4. Switch to **Diff Review** tab showing all 3 proposed files.
+5. Click **Accept All** and **Apply Approved Changes**.
+6. Verify in integrated terminal:
+   ```bash
+   pytest tests/test_cli.py -k test_config_command -q
+   # Output: 1 passed
+   flask --help
+   # Shows: config   Show loaded configuration as JSON.
+   ```
+
+### 2:50 - 3:45: Task C — Resilience & Cancellation
+1. Demonstrate server-side turn cancellation: Trigger a prompt and click **Cancel**; show turn halted immediately.
+2. Demonstrate error handling on an unreachable endpoint (`http://127.0.0.1:59999`).
+3. Run `git status --short` to prove zero unapproved files were touched.
+4. Conclude: All 5 competition capabilities verified.
 
 ---
 
-### 2:50 - 3:35: Task C — Resilience & Safe Failure Handling
-- **Action**:
-  1. Open ForgePilot Settings and modify endpoint to an unreachable address: `http://127.0.0.1:59999`.
-  2. Re-trigger an edit request.
-  3. Show:
-     - VS Code editor remains completely responsive.
-     - Resilience manager shows retry attempt notification and failover status.
-     - Safe error message displayed in sidebar.
-  4. Run in terminal:
-     ```bash
-     git status --short
-     ```
-  5. Show clean status: zero unapproved or corrupt files touched on disk!
+## PATH B: Offline Baseline / Quota Exhaustion (Honest Disclosure Run)
 
----
+### 0:00 - 0:50: Architecture, Live Connection & Honest Disclosure
+1. Open ForgePilot sidebar. Show the branded interface, tabs, and status indicator.
+2. **Demonstrate live session creation**: Click **+ New**; show session created on local TrueForge server (`http://localhost:8790`).
+3. **Demonstrate live server-side cancellation**: Trigger a turn and immediately click **Cancel**. Show TrueForge server logs and database record `client-cancelled`.
+4. **Transparent Disclosure**: State clearly:
+   > *"The local TrueForge server's configured OpenAI provider returned HTTP 429 quota exhaustion, and no Google provider is currently registered in TrueForge's internal database. Therefore, live inference is demonstrated via verified server session/cancellation, while code reasoning is verified deterministically against the official Flask benchmark."*
 
-### 3:35 - 3:45: Conclusion
-- Summarize: *"ForgePilot proves that with TrueForge, context engineering, MCP tools, and safe transactional diff reviews, autonomous coding in VS Code is reliable, safe, and entirely in developer control."*
+### 0:50 - 1:50: Task A — Inline Edit Mechanics & Acceptance Command
+1. Open `src/flask/helpers.py`, highlight `get_debug_flag`, press `Ctrl+Alt+I`.
+2. Show the inline input and explain the two-phase diff review architecture: changes are never written to disk without explicit developer approval.
+3. Show the Diff Review panel displaying the exact diff hunk and SHA-256 conflict protection.
+4. Run the acceptance command in terminal against the applied proposal in an isolated working copy:
+   ```bash
+   FLASK_DEBUG=off python -c "from flask.helpers import get_debug_flag; print(get_debug_flag())"
+   # Output: False
+   ```
+5. Test permutations: `FLASK_DEBUG=n` -> `False`, `FLASK_DEBUG=OFF` -> `False`, `FLASK_DEBUG=1` -> `True`.
+6. Demonstrate one-click transactional **Undo** restoring the exact baseline state.
 
+### 1:50 - 2:50: Task B — Autonomous Context Discovery & Verification
+1. Open the Context Explorer tab and explain the BM25 + symbol relevance engine.
+2. Show that for the Task B instruction, the engine autonomously scores and identifies `src/flask/cli.py`, `tests/test_cli.py`, and `docs/cli.rst` without user hardcoding filenames.
+3. Execute the verified CLI output and pytest suite:
+   ```bash
+   flask --help
+   # Shows: config   Show loaded configuration as JSON.
+   pytest tests/test_cli.py -k test_config_command -q
+   # Output: 1 passed
+   ```
+4. Note: File discovery, diff rendering, and pytest are deterministically verified; live LLM tool selection requires server provider credits.
+
+### 2:50 - 3:45: Automated Test Suite & Clean Benchmark Verification
+1. Run the full automated test suite in terminal:
+   ```bash
+   npm test
+   ```
+   Show all **58 tests passing across 8 suites** in Vitest.
+2. Run `git status --short flask` to show the official Flask 3.1.3 benchmark repository remains 100% clean and pristine at commit `22d92470`.
+3. Conclude: ForgePilot's complete VS Code extension architecture, 12 MCP tools, Context Engine, and Diff Manager are fully built, tested, and ready for live evaluation once an active provider is registered in TrueForge.

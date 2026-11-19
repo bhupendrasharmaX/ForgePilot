@@ -134,7 +134,7 @@ From a clean clone:
 
 ```bash
 # Clone the repository
-git clone https://github.com/<your-username>/ForgePilot.git
+git clone https://github.com/bhupendrasharmaX/ForgePilot.git
 cd ForgePilot
 
 # Install dependencies
@@ -159,25 +159,31 @@ This starts the TrueForge harness on `http://localhost:8790` backed by local SQL
 
 ### Step 2: Configure a Model Provider in TrueForge
 > [!IMPORTANT]
-> Setting environment variables alone (e.g. `GEMINI_API_KEY` or `OPENAI_API_KEY`) does **NOT** automatically register a model provider in TrueForge's internal database.
-> The evaluator must configure an active model provider inside TrueForge:
+> **Provider Setup Requirement**: Setting environment variables alone (e.g. `GEMINI_API_KEY` or `OPENAI_API_KEY`) does **NOT** automatically register a model provider in TrueForge's internal SQLite database (`%LOCALAPPDATA%\trueforge\Data\db\db.sqlite`).
+>
+> The inspected local TrueForge database contains:
+> - Registered Agent: `forgepilot-agent` (ID: `01m7qzsxw4g7a5zywb80eryje9`)
+> - Assigned Model: `openai/chat-latest` under an `openai` provider record
+> - Live Status: The configured OpenAI account returned HTTP 429 (`insufficient_quota`).
+> - Gemini Status: No Google/Gemini provider is registered in TrueForge's SQLite database.
+>
+> **To enable live model inference during evaluation**:
 > 1. Open `http://localhost:8790` in your web browser.
 > 2. Navigate to **Settings** -> **Model Providers**.
-> 3. Add or update a provider with valid credits:
+> 3. Add or update a provider with funded credits:
 >    - **OpenAI**: Add an API key with active credits (e.g., `gpt-4o`, `gpt-4o-mini`).
 >    - **Google**: Add an active Gemini API key (e.g., `gemini-2.5-pro`, `gemini-2.5-flash`).
 > 4. Ensure the agent `forgepilot-agent` is assigned an active, funded model.
 
 ---
 
-## 9. Extension Configuration
+## 9. Extension Configuration vs Server Configuration
 
-In VS Code Settings (`Ctrl+,` or `Cmd+,`), configure under `ForgePilot`:
-- `forgepilot.trueforgeEndpoint`: `http://localhost:8790`
-- `forgepilot.apiKey`: *(Optional for local TrueForge)*
-- `forgepilot.primaryModel`: `gemini-2.5-pro` (or your configured model)
-- `forgepilot.fallbackModel`: `gemini-2.5-flash`
-- `forgepilot.tokenBudget`: `20000`
+To prevent confusion between client-side settings and server-side state:
+
+- **Extension Configuration Defaults**: In VS Code Settings (`Ctrl+,` or `Cmd+,` under `ForgePilot`), `forgepilot.primaryModel` (`gemini-2.5-pro`) and `forgepilot.fallbackModel` (`gemini-2.5-flash`) define client-side preference metadata.
+- **Server-Side Provider Reality**: TrueForge executes models registered inside its internal `model_provider` and `agent` database tables. Client settings cannot override server-side provider credentials.
+- **Fallback Verification Status**: Failover logic between primary and secondary models is **AUTOMATED TEST VERIFIED** in Vitest (`test/trueforge.test.ts`), but **NOT VERIFIED LIVE** across live providers because only a single quota-exhausted OpenAI provider was registered in the local server database.
 
 ---
 
@@ -261,7 +267,7 @@ Verified on Pallets Flask at tag `3.1.3` (commit `22d924701a6ae2e4cd01e9a15bbaf3
   ```
 - **Output**: `False`
 - **Additional Verification**: `'n'`, `'OFF'`, `'N'` return `False`; `'1'`, `'true'` return `True`.
-- **Status**: **DETERMINISTIC VERIFIED (PASS)**
+- **Status**: **DETERMINISTIC VERIFIED** *(Accepted changes verified directly in Python runtime against isolated Flask 3.1.3 working copy)*
 
 ### TASK B — AUTONOMOUS MULTI-FILE AGENT
 - **Instruction**: *"Add a new built-in CLI command flask config that prints the loaded application's configuration as JSON, masking the values of any key containing SECRET, PASSWORD, TOKEN or KEY as '***'. It must appear in flask --help, be covered by a test, and be documented alongside the other built-in commands."*
@@ -277,7 +283,8 @@ Verified on Pallets Flask at tag `3.1.3` (commit `22d924701a6ae2e4cd01e9a15bbaf3
   flask --help
   # Output includes: config   Show loaded configuration as JSON.
   ```
-- **Status**: **DETERMINISTIC VERIFIED (PASS)**
+- **Status**: **DETERMINISTIC VERIFIED (Discovery & Pytest) / NOT VERIFIED LIVE (Model Inference)**
+  *(Context retrieval and file discovery verified deterministically; genuine live model-driven tool selection blocked by upstream provider HTTP 429 quota exhaustion).*
 
 ### TASK C — RESILIENCE & WORKSPACE PROTECTION
 - **Setup**: Configured client with dead endpoint `http://127.0.0.1:59999` and invalid key.
@@ -285,7 +292,7 @@ Verified on Pallets Flask at tag `3.1.3` (commit `22d924701a6ae2e4cd01e9a15bbaf3
   - ResilienceManager retried with backoff and halted safely.
   - Informative error surfaced in chat timeline.
   - Zero unapproved file modifications made (`git status --short flask` returned empty).
-- **Status**: **AUTOMATED TEST VERIFIED (PASS)**
+- **Status**: **AUTOMATED TEST VERIFIED**
 
 ---
 
@@ -309,6 +316,6 @@ ForgePilot was **built completely from scratch** specifically for the TrueFoundr
 
 ---
 
-## 17. License
+## 17. License & Intellectual Property
 
-Permissive Open Source License — see `LICENSE` file.
+Repository created for the Techfest 2026–27 TrueFoundry Forge-a-thon. Open source license selection pending final submission confirmation. All rights reserved by authors.
