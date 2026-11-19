@@ -142,11 +142,13 @@ export class ResilienceManager {
           continue;
         }
 
+        const modelLabel = currentModel || config.fallbackModel || config.primaryModel || 'agent model';
+
         // Both primary and fallback exhausted or unrecoverable error
         yield {
           type: 'error',
           sessionId,
-          error: `Execution failed after ${attempt} attempts on ${currentModel}: ${errorMsg}`,
+          error: `Execution failed after ${attempt} attempts on ${modelLabel}: ${errorMsg}`,
           timestamp: Date.now()
         };
         return;
