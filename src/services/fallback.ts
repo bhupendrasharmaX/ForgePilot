@@ -32,6 +32,8 @@ export class ResilienceManager {
       msg.includes('fetch failed') ||
       msg.includes('econnrefused') ||
       msg.includes('timeout') ||
+      msg.includes('headers timeout') ||
+      msg.includes('cannot connect to api') ||
       msg.includes('503') ||
       msg.includes('502') ||
       msg.includes('504')

@@ -340,11 +340,17 @@ export class TrueForgeClient {
                 timestamp: Date.now()
               };
             } else if (rawEvent.state?.status === 'error') {
+              const errorMessage =
+                rawEvent.state?.message ||
+                rawEvent.state?.error?.message ||
+                (typeof rawEvent.state?.error === 'string' ? rawEvent.state.error : '') ||
+                rawEvent.message ||
+                'Turn execution failed.';
               yield {
                 type: 'error',
                 sessionId,
                 turnId: activeTurnId,
-                error: rawEvent.state?.error?.message || 'Turn execution failed.',
+                error: errorMessage,
                 timestamp: Date.now()
               };
             } else {
