@@ -1,11 +1,11 @@
 # ForgePilot — Technical Write-Up & Competition Submission
 
 ## 1. Team
-- **Team Name / Participant**: ForgePilot Team
+- **Team Name / Participant**: Techworms Team (Bhupendra Sharma - @bhupendrasharmaX)
 - **Project**: ForgePilot — Autonomous AI Coding Assistant for Visual Studio Code
 - **Harness Platform**: TrueForge Runtime (`@truefoundry/trueforge-sdk` v0.185.0)
 - **Event**: Techfest 2026–27 TrueFoundry Forge-a-thon (Round 1)
-- **Submission Date**: 19 November 2026
+- **Submission Date**: 20 November 2026
 
 ---
 
