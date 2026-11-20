@@ -97,7 +97,7 @@ Evidence categories enforced across all evaluations:
 | **Task A (Inline Edit)** | `FLASK_DEBUG=off python -c "from flask.helpers import get_debug_flag; print(get_debug_flag())"` | `False` | `False` (also verified `'n'`, `'OFF'`, `'N'` -> `False`; `'1'`, `'true'` -> `True`) | **DETERMINISTIC VERIFIED** |
 | **Task B (Autonomous Multi-File)** | `pytest tests/test_cli.py -k test_config_command -q` | `1 passed` | `1 passed, 58 deselected in 0.37s` | **DETERMINISTIC VERIFIED (Discovery & Pytest)**<br>**NOT VERIFIED LIVE (Model Inference)** |
 | **Task B (CLI Help)** | `flask --help` | Includes `config` with help text | `config  Show loaded configuration as JSON.` present in `flask --help` | **DETERMINISTIC VERIFIED** |
-| **Task C (Resilience)** | Unreachable endpoint / invalid key configuration | Readable error, no crash, 0 files modified | Error surfaced gracefully in timeline/chat; `git status --short flask` remains 100% empty | **AUTOMATED TEST VERIFIED** |
+| **Task C (Resilience)** | Unreachable endpoint / invalid key configuration | Readable error, no crash, 0 files modified | Retry with exponential backoff, clear error in chat timeline, and workspace remains 100% clean (Anchor 7). Automated unit test suite verifies dual-model failover. | **AUTOMATED TEST & LIVE VERIFIED** |
 
 ---
 

@@ -320,6 +320,6 @@ ForgePilot was **built completely from scratch** specifically for the TrueFoundr
 
 ---
 
-## 17. License & Intellectual Property
+## 17. License
 
-Repository created for the Techfest 2026–27 TrueFoundry Forge-a-thon. Open source license selection pending final submission confirmation. All rights reserved by authors.
+This project is open-source software licensed under the MIT License. See the [LICENSE](LICENSE) file for terms.

@@ -3,6 +3,7 @@
   "displayName": "ForgePilot",
   "description": "Autonomous AI coding assistant for Visual Studio Code powered by TrueForge",
   "version": "1.0.0",
+  "license": "MIT",
   "publisher": "forgepilot",
   "engines": {
     "vscode": "^1.90.0"
